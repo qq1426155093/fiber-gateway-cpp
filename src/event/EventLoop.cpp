@@ -210,7 +210,7 @@ void EventLoop::stop() {
     notify_wakeup();
 }
 
-void EventLoop::post(DeferEntry &entry) {
+void EventLoop::post(DeferEntry &entry) noexcept {
     FIBER_ASSERT(entry.on_run != nullptr || entry.on_cancel != nullptr);
 
     std::uint8_t state = entry.state.load(std::memory_order_acquire);
@@ -226,15 +226,15 @@ void EventLoop::post(DeferEntry &entry) {
     enqueue_defer(&entry.node);
 }
 
-void EventLoop::cancel(DeferEntry &entry) {
+bool EventLoop::cancel(DeferEntry &entry) noexcept {
     std::uint8_t state = entry.state.load(std::memory_order_acquire);
     for (;;) {
         if ((state & kDeferQueued) == 0) {
-            return;
+            return false;
         }
         std::uint8_t desired = state | kDeferCanceled;
         if (entry.state.compare_exchange_weak(state, desired, std::memory_order_acq_rel, std::memory_order_acquire)) {
-            return;
+            return true;
         }
     }
 }

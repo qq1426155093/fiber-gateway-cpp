@@ -101,8 +101,8 @@ public:
     [[nodiscard]] bool in_loop() const noexcept { return current_or_null() == this; }
     [[nodiscard]] std::chrono::steady_clock::time_point now() const noexcept { return now_; }
 
-    void post(DeferEntry &entry);
-    void cancel(DeferEntry &entry);
+    void post(DeferEntry &entry) noexcept;
+    bool cancel(DeferEntry &entry) noexcept;
 
     void post_at(std::chrono::steady_clock::time_point when, TimerEntry &entry);
     void cancel(TimerEntry &entry);
@@ -110,7 +110,7 @@ public:
     template<typename Handle, auto EntryMember, auto RunCb, auto CancelCb>
         requires detail::DeferEntryMember<Handle, DeferEntry, EntryMember> && detail::DeferCallback<Handle, RunCb> &&
                  detail::DeferCallback<Handle, CancelCb>
-    void post(Handle &handle) {
+    void post(Handle &handle) noexcept {
         DeferEntry &entry = handle.*EntryMember;
         entry.handle_offset = reinterpret_cast<char *>(&entry) - reinterpret_cast<char *>(&handle);
         entry.on_run = &EventLoop::defer_trampoline<Handle, EntryMember, RunCb>;
@@ -120,9 +120,9 @@ public:
 
     template<typename Handle, auto EntryMember>
         requires detail::DeferEntryMember<Handle, DeferEntry, EntryMember>
-    void cancel(Handle &handle) {
+    bool cancel(Handle &handle) {
         DeferEntry &entry = handle.*EntryMember;
-        cancel(entry);
+        return cancel(entry);
     }
 
     template<typename Handle, auto EntryMember, auto Cb>
