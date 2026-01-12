@@ -88,6 +88,7 @@ if(FIBER_BUILD_TESTS)
         tests/MutexTest.cpp
         tests/SignalTest.cpp
         tests/TcpListenerTest.cpp
+        tests/TcpStreamTest.cpp
         tests/IpAddressTest.cpp
     )
     target_link_libraries(fiber_tests PRIVATE fiber_lib GTest::gtest_main)

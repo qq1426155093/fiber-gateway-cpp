@@ -3,6 +3,7 @@
 #include <cerrno>
 #include <new>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #include "../../common/Assert.h"
@@ -79,13 +80,13 @@ void StreamFd::close() {
     ::close(fd);
 }
 
-StreamFd::ReadWriteAwaiter<fiber::event::IoEvent::Read> StreamFd::read(void *buf, size_t len) noexcept {
-    return {*this, buf, len};
-}
+StreamFd::ReadAwaiter StreamFd::read(void *buf, size_t len) noexcept { return {*this, buf, len}; }
 
-StreamFd::ReadWriteAwaiter<fiber::event::IoEvent::Write> StreamFd::write(const void *buf, size_t len) noexcept {
-    return {*this, const_cast<void *>(buf), len};
-}
+StreamFd::WriteAwaiter StreamFd::write(const void *buf, size_t len) noexcept { return {*this, buf, len}; }
+
+StreamFd::ReadvAwaiter StreamFd::readv(const struct iovec *iov, int iovcnt) noexcept { return {*this, iov, iovcnt}; }
+
+StreamFd::WritevAwaiter StreamFd::writev(const struct iovec *iov, int iovcnt) noexcept { return {*this, iov, iovcnt}; }
 
 fiber::common::IoErr StreamFd::read_once(void *buf, size_t len, size_t &out) {
     out = 0;
@@ -116,6 +117,50 @@ fiber::common::IoErr StreamFd::write_once(const void *buf, size_t len, size_t &o
     }
     for (;;) {
         ssize_t rc = ::send(fd_, buf, len, 0);
+        if (rc >= 0) {
+            out = static_cast<size_t>(rc);
+            return fiber::common::IoErr::None;
+        }
+        int err = errno;
+        if (err == EINTR) {
+            continue;
+        }
+        if (err == EAGAIN || err == EWOULDBLOCK) {
+            return fiber::common::IoErr::WouldBlock;
+        }
+        return fiber::common::io_err_from_errno(err);
+    }
+}
+
+fiber::common::IoErr StreamFd::readv_once(const struct iovec *iov, int iovcnt, size_t &out) {
+    out = 0;
+    if (fd_ < 0) {
+        return fiber::common::IoErr::BadFd;
+    }
+    for (;;) {
+        ssize_t rc = ::readv(fd_, iov, iovcnt);
+        if (rc >= 0) {
+            out = static_cast<size_t>(rc);
+            return fiber::common::IoErr::None;
+        }
+        int err = errno;
+        if (err == EINTR) {
+            continue;
+        }
+        if (err == EAGAIN || err == EWOULDBLOCK) {
+            return fiber::common::IoErr::WouldBlock;
+        }
+        return fiber::common::io_err_from_errno(err);
+    }
+}
+
+fiber::common::IoErr StreamFd::writev_once(const struct iovec *iov, int iovcnt, size_t &out) {
+    out = 0;
+    if (fd_ < 0) {
+        return fiber::common::IoErr::BadFd;
+    }
+    for (;;) {
+        ssize_t rc = ::writev(fd_, iov, iovcnt);
         if (rc >= 0) {
             out = static_cast<size_t>(rc);
             return fiber::common::IoErr::None;
@@ -184,7 +229,7 @@ void StreamFd::on_events(fiber::event::Poller::Item *item, int fd, fiber::event:
     stream_item->stream->handle_events(events);
 }
 
-void StreamFd::CrossThreadWaiter::on_notify_cancel(CrossThreadWaiter *waiter) {
+void CrossThreadWaiter::on_notify_cancel(CrossThreadWaiter *waiter) {
     WaiterState state = waiter->state_.load(std::memory_order_relaxed);
     StreamFd *stream = waiter->stream_;
     FIBER_ASSERT(stream->loop_.in_loop());
@@ -201,7 +246,7 @@ void StreamFd::CrossThreadWaiter::on_notify_cancel(CrossThreadWaiter *waiter) {
 
     delete waiter;
 }
-void StreamFd::CrossThreadWaiter::cancel_wait() noexcept {
+void CrossThreadWaiter::cancel_wait() noexcept {
     WaiterState state = state_.load(std::memory_order_acquire);
     WaiterState expected;
     for (;;) {
@@ -227,7 +272,7 @@ void StreamFd::CrossThreadWaiter::cancel_wait() noexcept {
     }
 }
 
-void StreamFd::CrossThreadWaiter::do_notify_resume(CrossThreadWaiter *waiter) noexcept {
+void CrossThreadWaiter::do_notify_resume(CrossThreadWaiter *waiter) noexcept {
     WaiterState state = waiter->state_.load(std::memory_order_acquire);
     WaiterState expected;
 
@@ -253,7 +298,7 @@ void StreamFd::CrossThreadWaiter::do_notify_resume(CrossThreadWaiter *waiter) no
     }
 }
 
-void StreamFd::CrossThreadWaiter::on_notify_watch(CrossThreadWaiter *waiter) {
+void CrossThreadWaiter::on_notify_watch(CrossThreadWaiter *waiter) {
     FIBER_ASSERT(waiter);
     FIBER_ASSERT(waiter->stream_);
 
@@ -279,12 +324,12 @@ void StreamFd::CrossThreadWaiter::on_notify_watch(CrossThreadWaiter *waiter) {
     // wait for io-event notify
 }
 
-void StreamFd::CrossThreadWaiter::on_cancel_wait(CrossThreadWaiter *waiter) {
+void CrossThreadWaiter::on_cancel_wait(CrossThreadWaiter *waiter) {
     FIBER_ASSERT(waiter);
     delete waiter;
 }
 
-void StreamFd::CrossThreadWaiter::on_notify_resume(CrossThreadWaiter *waiter) {
+void CrossThreadWaiter::on_notify_resume(CrossThreadWaiter *waiter) {
     FIBER_ASSERT(waiter);
     FIBER_ASSERT(waiter->loop_->in_loop());
 
@@ -298,8 +343,8 @@ void StreamFd::CrossThreadWaiter::on_notify_resume(CrossThreadWaiter *waiter) {
 }
 
 
-template<fiber::event::IoEvent RW>
-StreamFd::ReadWriteAwaiter<RW>::~ReadWriteAwaiter() {
+template<typename Op>
+StreamFd::ReadWriteAwaiter<Op>::~ReadWriteAwaiter() {
     if (!waiting_) {
         FIBER_ASSERT(waiter_ == nullptr);
         return;
@@ -312,29 +357,17 @@ StreamFd::ReadWriteAwaiter<RW>::~ReadWriteAwaiter() {
         return;
     }
     FIBER_ASSERT(stream_->loop_.in_loop());
-    if constexpr (RW == fiber::event::IoEvent::Read) {
-        stream_->cancel_event<fiber::event::IoEvent::Read, LocalThreadWaiter>(this);
-    } else {
-        stream_->cancel_event<fiber::event::IoEvent::Write, LocalThreadWaiter>(this);
-    }
+    stream_->cancel_event<Op::kEvent, LocalThreadWaiter>(this);
 }
 
-template<fiber::event::IoEvent RW>
-bool StreamFd::ReadWriteAwaiter<RW>::await_suspend(std::coroutine_handle<> handle) {
-    if (!stream_) {
-        return false;
-    }
+template<typename Op>
+bool StreamFd::ReadWriteAwaiter<Op>::await_suspend(std::coroutine_handle<> handle) {
     coro_ = handle;
     err_ = fiber::common::IoErr::None;
     completed_ = false;
 
     size_t out = 0;
-    fiber::common::IoErr err = fiber::common::IoErr::None;
-    if constexpr (RW == fiber::event::IoEvent::Read) {
-        err = stream_->read_once(buf_, len_, out);
-    } else {
-        err = stream_->write_once(buf_, len_, out);
-    }
+    fiber::common::IoErr err = op_.once(*stream_, out);
     if (err == fiber::common::IoErr::None) {
         result_ = out;
         completed_ = true;
@@ -348,7 +381,7 @@ bool StreamFd::ReadWriteAwaiter<RW>::await_suspend(std::coroutine_handle<> handl
 
     waiting_ = true;
     if (stream_->loop_.in_loop()) {
-        fiber::common::IoErr watch_err = stream_->begin_event<RW, LocalThreadWaiter>(this);
+        fiber::common::IoErr watch_err = stream_->begin_event<Op::kEvent, LocalThreadWaiter>(this);
         if (watch_err != fiber::common::IoErr::None) {
             err_ = watch_err;
             completed_ = true;
@@ -368,7 +401,7 @@ bool StreamFd::ReadWriteAwaiter<RW>::await_suspend(std::coroutine_handle<> handl
         return false;
     }
     waiter->stream_ = stream_;
-    waiter->event_ = RW;
+    waiter->event_ = Op::kEvent;
     waiter->coro_ = handle;
     waiter->loop_ = current;
     waiter_ = waiter;
@@ -377,8 +410,8 @@ bool StreamFd::ReadWriteAwaiter<RW>::await_suspend(std::coroutine_handle<> handl
     return true;
 }
 
-template<fiber::event::IoEvent RW>
-fiber::common::IoResult<size_t> StreamFd::ReadWriteAwaiter<RW>::await_resume() noexcept {
+template<typename Op>
+fiber::common::IoResult<size_t> StreamFd::ReadWriteAwaiter<Op>::await_resume() noexcept {
     waiting_ = false;
     if (completed_) {
         completed_ = false;
@@ -397,11 +430,7 @@ fiber::common::IoResult<size_t> StreamFd::ReadWriteAwaiter<RW>::await_resume() n
         delete waiter;
     }
     if (err == fiber::common::IoErr::None) {
-        if constexpr (RW == fiber::event::IoEvent::Read) {
-            err = stream_->read_once(buf_, len_, out);
-        } else {
-            err = stream_->write_once(buf_, len_, out);
-        }
+        err = op_.once(*stream_, out);
     }
 
     if (err == fiber::common::IoErr::None) {
@@ -410,7 +439,9 @@ fiber::common::IoResult<size_t> StreamFd::ReadWriteAwaiter<RW>::await_resume() n
     return std::unexpected(err);
 }
 
-template class StreamFd::ReadWriteAwaiter<fiber::event::IoEvent::Read>;
-template class StreamFd::ReadWriteAwaiter<fiber::event::IoEvent::Write>;
+template class StreamFd::ReadWriteAwaiter<StreamFd::ReadOp>;
+template class StreamFd::ReadWriteAwaiter<StreamFd::WriteOp>;
+template class StreamFd::ReadWriteAwaiter<StreamFd::ReadvOp>;
+template class StreamFd::ReadWriteAwaiter<StreamFd::WritevOp>;
 
 } // namespace fiber::net::detail

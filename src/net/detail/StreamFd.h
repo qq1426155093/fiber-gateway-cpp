@@ -3,10 +3,13 @@
 
 #include <atomic>
 #include <cerrno>
+#include <concepts>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
+#include <sys/uio.h>
 #include <type_traits>
+#include <utility>
 
 #include "../../common/IoError.h"
 #include "../../common/NonCopyable.h"
@@ -16,6 +19,27 @@
 
 namespace fiber::net::detail {
 
+class StreamFd;
+
+struct WaiterBase {
+    StreamFd *stream_ = nullptr;
+    fiber::event::IoEvent event_{}; // request or ready event.
+    fiber::common::IoErr err_{fiber::common::IoErr::None}; //
+    std::coroutine_handle<> coro_ = nullptr;
+};
+
+struct LocalThreadWaiter : WaiterBase {};
+struct CrossThreadWaiter;
+
+template<typename T>
+concept StreamWaiter =
+    std::same_as<std::remove_cvref_t<T>, LocalThreadWaiter> ||
+    std::same_as<std::remove_cvref_t<T>, CrossThreadWaiter>;
+
+template<fiber::event::IoEvent Event>
+concept ReadWriteEvent =
+    (Event == fiber::event::IoEvent::Read || Event == fiber::event::IoEvent::Write);
+
 /**
  * forbidden read/write in multi-coroutine ,but read and write can overlap.
  * we do not add std::atomic_bool read_occupied_, write_occupied_ member for performance.
@@ -24,8 +48,52 @@ namespace fiber::net::detail {
  */
 class StreamFd : public common::NonCopyable, public common::NonMovable {
 public:
-    template<fiber::event::IoEvent RW>
+    struct ReadOp {
+        static constexpr fiber::event::IoEvent kEvent = fiber::event::IoEvent::Read;
+        void *buf_ = nullptr;
+        size_t len_ = 0;
+
+        ReadOp(void *buf, size_t len) : buf_(buf), len_(len) {}
+
+        fiber::common::IoErr once(StreamFd &stream, size_t &out) const { return stream.read_once(buf_, len_, out); }
+    };
+    struct WriteOp {
+        static constexpr fiber::event::IoEvent kEvent = fiber::event::IoEvent::Write;
+        const void *buf_ = nullptr;
+        size_t len_ = 0;
+
+        WriteOp(const void *buf, size_t len) : buf_(buf), len_(len) {}
+
+        fiber::common::IoErr once(StreamFd &stream, size_t &out) const { return stream.write_once(buf_, len_, out); }
+    };
+    struct ReadvOp {
+        static constexpr fiber::event::IoEvent kEvent = fiber::event::IoEvent::Read;
+        const struct iovec *iov_ = nullptr;
+        int iovcnt_ = 0;
+
+        ReadvOp(const struct iovec *iov, int iovcnt) : iov_(iov), iovcnt_(iovcnt) {}
+
+        fiber::common::IoErr once(StreamFd &stream, size_t &out) const { return stream.readv_once(iov_, iovcnt_, out); }
+    };
+    struct WritevOp {
+        static constexpr fiber::event::IoEvent kEvent = fiber::event::IoEvent::Write;
+        const struct iovec *iov_ = nullptr;
+        int iovcnt_ = 0;
+
+        WritevOp(const struct iovec *iov, int iovcnt) : iov_(iov), iovcnt_(iovcnt) {}
+
+        fiber::common::IoErr once(StreamFd &stream, size_t &out) const {
+            return stream.writev_once(iov_, iovcnt_, out);
+        }
+    };
+
+    template<typename Op>
     class ReadWriteAwaiter;
+
+    using ReadAwaiter = ReadWriteAwaiter<ReadOp>;
+    using WriteAwaiter = ReadWriteAwaiter<WriteOp>;
+    using ReadvAwaiter = ReadWriteAwaiter<ReadvOp>;
+    using WritevAwaiter = ReadWriteAwaiter<WritevOp>;
 
     StreamFd(fiber::event::EventLoop &loop, int fd);
     ~StreamFd();
@@ -34,56 +102,58 @@ public:
     [[nodiscard]] int fd() const noexcept;
     void close();
 
-    [[nodiscard]] ReadWriteAwaiter<fiber::event::IoEvent::Read> read(void *buf, size_t len) noexcept;
-    [[nodiscard]] ReadWriteAwaiter<fiber::event::IoEvent::Write> write(const void *buf, size_t len) noexcept;
+    [[nodiscard]] ReadAwaiter read(void *buf, size_t len) noexcept;
+    [[nodiscard]] WriteAwaiter write(const void *buf, size_t len) noexcept;
+    [[nodiscard]] ReadvAwaiter readv(const struct iovec *iov, int iovcnt) noexcept;
+    [[nodiscard]] WritevAwaiter writev(const struct iovec *iov, int iovcnt) noexcept;
 
 
 private:
+    friend struct CrossThreadWaiter;
+
     struct StreamItem : fiber::event::Poller::Item {
         StreamFd *stream = nullptr;
     };
-    struct WaiterBase {
-        StreamFd *stream_ = nullptr;
-        fiber::event::IoEvent event_{}; // request or ready event.
-        fiber::common::IoErr err_{fiber::common::IoErr::None}; //
-        std::coroutine_handle<> coro_ = nullptr;
-    };
-    // ReadAwaiter WriteAwaiter can inherent this struct.
-    struct LocalThreadWaiter : WaiterBase {};
-    struct CrossThreadWaiter;
 
-    template<fiber::event::IoEvent RW, typename Waiter>
-        requires((std::is_same<LocalThreadWaiter, Waiter>::value || std::is_same<CrossThreadWaiter, Waiter>::value) &&
-                 (RW == fiber::event::IoEvent::Read || RW == fiber::event::IoEvent::Write))
+    template<fiber::event::IoEvent Event>
+        requires(ReadWriteEvent<Event>)
+    LocalThreadWaiter *&local_waiter_slot() noexcept {
+        if constexpr (Event == fiber::event::IoEvent::Read) {
+            return local_read_waiter_;
+        }
+        return local_write_waiter_;
+    }
+
+    template<fiber::event::IoEvent Event>
+        requires(ReadWriteEvent<Event>)
+    CrossThreadWaiter *&cross_waiter_slot() noexcept {
+        if constexpr (Event == fiber::event::IoEvent::Read) {
+            return cross_read_waiter_;
+        }
+        return cross_write_waiter_;
+    }
+
+    template<fiber::event::IoEvent Event>
+        requires(ReadWriteEvent<Event>)
+    bool &local_waiting_slot() noexcept {
+        if constexpr (Event == fiber::event::IoEvent::Read) {
+            return local_read_waiting_;
+        }
+        return local_write_waiting_;
+    }
+
+    template<fiber::event::IoEvent Event, typename Waiter>
+        requires(ReadWriteEvent<Event> && StreamWaiter<Waiter>)
     fiber::common::IoErr begin_event(Waiter *waiter) noexcept {
         FIBER_ASSERT(loop_.in_loop());
         FIBER_ASSERT(waiter);
         if (fd_ < 0) {
             return fiber::common::IoErr::BadFd;
         }
-        if constexpr (RW == fiber::event::IoEvent::Read) {
-            FIBER_ASSERT(local_read_waiter_ == nullptr);
-            if constexpr (std::is_same<LocalThreadWaiter, Waiter>::value) {
-                local_read_waiter_ = waiter;
-                local_read_waiting_ = true;
-            } else {
-                cross_read_waiter_ = waiter;
-                local_read_waiting_ = false;
-            }
-        } else {
-            FIBER_ASSERT(local_write_waiter_ == nullptr);
-            if constexpr (std::is_same<LocalThreadWaiter, Waiter>::value) {
-                local_write_waiter_ = waiter;
-                local_write_waiting_ = true;
-            } else {
-                cross_write_waiter_ = waiter;
-                local_write_waiting_ = false;
-            }
-        }
-        fiber::event::IoEvent desired = watching_ | RW;
-        if (desired == watching_) {
-            return fiber::common::IoErr::None;
-        }
+
+        FIBER_ASSERT((watching_ & Event) == fiber::event::IoEvent::None);
+        fiber::event::IoEvent desired = watching_ | Event;
+
         int rc = 0;
         if (watching_ == fiber::event::IoEvent::None) {
             rc = loop_.poller().add(fd_, desired, &item_);
@@ -91,39 +161,33 @@ private:
             rc = loop_.poller().mod(fd_, desired, &item_);
         }
         if (rc != 0) {
-            if constexpr (RW == fiber::event::IoEvent::Read) {
-                local_read_waiter_ = nullptr;
-            } else {
-                local_write_waiter_ = nullptr;
-            }
             return fiber::common::io_err_from_errno(errno);
         }
         watching_ = desired;
+        auto &local_waiter = local_waiter_slot<Event>();
+        auto &local_waiting = local_waiting_slot<Event>();
+        FIBER_ASSERT(local_waiter == nullptr);
+        if constexpr (std::is_same<LocalThreadWaiter, Waiter>::value) {
+            local_waiter = waiter;
+            local_waiting = true;
+        } else {
+            auto &cross_waiter = cross_waiter_slot<Event>();
+            cross_waiter = waiter;
+            local_waiting = false;
+        }
         return fiber::common::IoErr::None;
     }
-    template<fiber::event::IoEvent RW, typename Waiter>
-        requires((std::is_same<LocalThreadWaiter, Waiter>::value || std::is_same<CrossThreadWaiter, Waiter>::value) &&
-                 (RW == fiber::event::IoEvent::Read || RW == fiber::event::IoEvent::Write))
+    template<fiber::event::IoEvent Event, typename Waiter>
+        requires(ReadWriteEvent<Event> && StreamWaiter<Waiter>)
     fiber::common::IoErr cancel_event(Waiter *waiter) noexcept {
         FIBER_ASSERT(loop_.in_loop());
         if (!waiter) {
             return fiber::common::IoErr::Invalid;
         }
-        void *current = nullptr;
-        if constexpr (RW == fiber::event::IoEvent::Read) {
-            current = static_cast<void *>(local_read_waiter_);
-        } else {
-            current = static_cast<void *>(local_write_waiter_);
-        }
-        if (current != static_cast<void *>(waiter)) {
-            return fiber::common::IoErr::NotFound;
-        }
-        if constexpr (RW == fiber::event::IoEvent::Read) {
-            local_read_waiter_ = nullptr;
-        } else {
-            local_write_waiter_ = nullptr;
-        }
-        fiber::event::IoEvent desired = watching_ & ~RW;
+        auto &local_waiter = local_waiter_slot<Event>();
+        FIBER_ASSERT(static_cast<void *>(local_waiter) == static_cast<void *>(waiter));
+        local_waiter = nullptr;
+        fiber::event::IoEvent desired = watching_ & ~Event;
         if (desired == watching_) {
             return fiber::common::IoErr::None;
         }
@@ -139,6 +203,8 @@ private:
 
     fiber::common::IoErr read_once(void *buf, size_t len, size_t &out);
     fiber::common::IoErr write_once(const void *buf, size_t len, size_t &out);
+    fiber::common::IoErr readv_once(const struct iovec *iov, int iovcnt, size_t &out);
+    fiber::common::IoErr writev_once(const struct iovec *iov, int iovcnt, size_t &out);
 
     static void on_events(fiber::event::Poller::Item *item, int fd, fiber::event::IoEvent events);
     void handle_events(fiber::event::IoEvent events);
@@ -180,7 +246,7 @@ enum class WaiterState : std::uint8_t {
     Waiting_Cancel, // wake by event before Request_Cancel request arrive.
     Canceled, // Notify_Watch and Notify_Resume state can turn to canceled
 };
-struct StreamFd::CrossThreadWaiter : WaiterBase {
+struct CrossThreadWaiter : WaiterBase {
     fiber::event::EventLoop *loop_ = nullptr;
     // used to notify io-loop watch event and caller-loop resume
     fiber::event::EventLoop::DeferEntry notify_entry_{};
@@ -197,12 +263,15 @@ struct StreamFd::CrossThreadWaiter : WaiterBase {
     static void on_cancel_wait(CrossThreadWaiter *waiter);
 };
 
-template<fiber::event::IoEvent RW>
+template<typename Op>
 class StreamFd::ReadWriteAwaiter : public LocalThreadWaiter {
 public:
-    ReadWriteAwaiter(StreamFd &stream, void *buf, size_t len) noexcept : buf_(buf), len_(len) {
+    template<typename... Args>
+        requires(std::is_constructible_v<Op, Args...>)
+    ReadWriteAwaiter(StreamFd &stream, Args &&...args) noexcept(std::is_nothrow_constructible_v<Op, Args...>) :
+        op_(std::forward<Args>(args)...) {
         stream_ = &stream;
-        event_ = RW;
+        event_ = Op::kEvent;
     }
 
     ReadWriteAwaiter(const ReadWriteAwaiter &) = delete;
@@ -213,13 +282,13 @@ public:
 
     bool await_ready() noexcept { return false; }
     bool await_suspend(std::coroutine_handle<> handle);
-    // invoke ::recv()/::send in this function arccording to RW, maybe EAGAIN.
+    // invoke io operation in this function according to Op, maybe EAGAIN.
     fiber::common::IoResult<size_t> await_resume() noexcept;
 
 private:
     friend class StreamFd;
-    void *buf_ = nullptr;
-    size_t len_ = 0;
+    static_assert(Op::kEvent == fiber::event::IoEvent::Read || Op::kEvent == fiber::event::IoEvent::Write);
+    Op op_;
     bool waiting_ = false;
     CrossThreadWaiter *waiter_ = nullptr;
     size_t result_ = 0;

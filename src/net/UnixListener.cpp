@@ -79,7 +79,7 @@ fiber::common::IoErr UnixTraits::accept_once(int fd, UnixAcceptResult &out) {
         int client = ::accept4(fd, reinterpret_cast<sockaddr *>(&addr), &len, SOCK_NONBLOCK | SOCK_CLOEXEC);
         if (client >= 0) {
             out.fd = client;
-            UnixAddress peer;
+            UnixAddress peer = UnixAddress::unnamed();
             if (!UnixAddress::from_sockaddr(reinterpret_cast<const sockaddr *>(&addr), len, peer)) {
                 ::close(client);
                 out.fd = -1;

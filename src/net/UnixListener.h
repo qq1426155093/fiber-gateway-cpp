@@ -19,7 +19,7 @@ struct UnixListenOptions {
 
 struct UnixAcceptResult {
     int fd = -1;
-    UnixAddress peer{};
+    UnixAddress peer = UnixAddress::unnamed();
 };
 
 struct UnixTraits {
