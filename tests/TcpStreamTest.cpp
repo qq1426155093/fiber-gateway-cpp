@@ -375,6 +375,51 @@ DetachedTask readv_writev_server(fiber::event::EventLoop *loop,
     co_return;
 }
 
+DetachedTask connect_client(fiber::event::EventLoop *loop,
+                            fiber::net::SocketAddress target,
+                            std::promise<fiber::common::IoResult<std::string>> *response_promise,
+                            std::string request,
+                            std::string expected_response) {
+    auto infant_result = co_await fiber::net::TcpStream::connect(*loop, target);
+    if (!infant_result) {
+        response_promise->set_value(std::unexpected(infant_result.error()));
+        fiber::event::EventLoop::current().stop();
+        co_return;
+    }
+    fiber::net::TcpStream stream(std::move(*infant_result));
+
+    size_t write_offset = 0;
+    while (write_offset < request.size()) {
+        auto result = co_await stream.write(request.data() + write_offset, request.size() - write_offset);
+        if (!result || *result == 0) {
+            auto err = result ? fiber::common::IoErr::NotConnected : result.error();
+            response_promise->set_value(std::unexpected(err));
+            stream.close();
+            fiber::event::EventLoop::current().stop();
+            co_return;
+        }
+        write_offset += *result;
+    }
+
+    std::string buffer(expected_response.size(), '\0');
+    size_t read_offset = 0;
+    while (read_offset < buffer.size()) {
+        auto result = co_await stream.read(buffer.data() + read_offset, buffer.size() - read_offset);
+        if (!result || *result == 0) {
+            auto err = result ? fiber::common::IoErr::NotConnected : result.error();
+            response_promise->set_value(std::unexpected(err));
+            stream.close();
+            fiber::event::EventLoop::current().stop();
+            co_return;
+        }
+        read_offset += *result;
+    }
+    response_promise->set_value(buffer);
+    stream.close();
+    fiber::event::EventLoop::current().stop();
+    co_return;
+}
+
 } // namespace
 
 TEST(TcpStreamTest, ReadWriteRoundTrip) {
@@ -425,6 +470,64 @@ TEST(TcpStreamTest, ReadWriteRoundTrip) {
         return;
     }
 
+    auto read_result = read_future.get();
+    ASSERT_TRUE(read_result);
+    EXPECT_EQ(*read_result, request);
+    auto write_result = write_future.get();
+    ASSERT_TRUE(write_result);
+    group.join();
+}
+
+TEST(TcpStreamTest, ConnectsWithAwaiter) {
+    fiber::event::EventLoopGroup group(2);
+    group.start();
+
+    std::promise<uint16_t> port_promise;
+    std::promise<fiber::common::IoResult<std::string>> read_promise;
+    std::promise<fiber::common::IoResult<void>> write_promise;
+    std::promise<fiber::common::IoResult<std::string>> response_promise;
+    auto port_future = port_promise.get_future();
+    auto read_future = read_promise.get_future();
+    auto write_future = write_promise.get_future();
+    auto response_future = response_promise.get_future();
+
+    const std::string request = "ping";
+    const std::string response = "pong";
+
+    fiber::async::spawn(group.at(0), [&]() {
+        read_write_server(&group.at(0), &port_promise, &read_promise, &write_promise, request, response);
+    });
+
+    uint16_t port = port_future.get();
+    ASSERT_NE(port, 0);
+
+    fiber::net::SocketAddress target(fiber::net::IpAddress::loopback_v4(), port);
+    fiber::async::spawn(group.at(1), [&]() {
+        connect_client(&group.at(1), target, &response_promise, request, response);
+    });
+
+    if (response_future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+        group.stop();
+        group.join();
+        FAIL() << "connect client did not complete in time";
+        return;
+    }
+    auto response_result = response_future.get();
+    ASSERT_TRUE(response_result);
+    EXPECT_EQ(*response_result, response);
+
+    if (read_future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+        group.stop();
+        group.join();
+        FAIL() << "server read did not complete in time";
+        return;
+    }
+    if (write_future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+        group.stop();
+        group.join();
+        FAIL() << "server write did not complete in time";
+        return;
+    }
     auto read_result = read_future.get();
     ASSERT_TRUE(read_result);
     EXPECT_EQ(*read_result, request);

@@ -1,12 +1,56 @@
 #include "UnixStream.h"
 
+#include <cerrno>
+#include <sys/socket.h>
+
 namespace fiber::net {
+
+UnixStream::ConnectAwaiter UnixStream::connect(fiber::event::EventLoop &loop, const UnixAddress &peer) noexcept {
+    return detail::ConnectFd<UnixConnectTraits>::connect(loop, peer);
+}
+
+fiber::common::IoResult<int> UnixConnectTraits::create_socket(const UnixAddress &peer) {
+    if (peer.kind() == UnixAddressKind::Unnamed) {
+        return std::unexpected(fiber::common::IoErr::Invalid);
+    }
+    int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (fd < 0) {
+        return std::unexpected(fiber::common::io_err_from_errno(errno));
+    }
+    return fd;
+}
+
+fiber::common::IoErr UnixConnectTraits::connect_once(int fd, const UnixAddress &peer) {
+    sockaddr_storage storage{};
+    socklen_t len = 0;
+    if (!peer.to_sockaddr(storage, len)) {
+        return fiber::common::IoErr::NotSupported;
+    }
+    for (;;) {
+        int rc = ::connect(fd, reinterpret_cast<const sockaddr *>(&storage), len);
+        if (rc == 0) {
+            return fiber::common::IoErr::None;
+        }
+        int err = errno;
+        if (err == EINTR) {
+            continue;
+        }
+        if (err == EINPROGRESS || err == EALREADY) {
+            return fiber::common::IoErr::WouldBlock;
+        }
+        return fiber::common::io_err_from_errno(err);
+    }
+}
 
 UnixStream::UnixStream(fiber::event::EventLoop &loop, int fd) : stream_(loop, fd) {
 }
 
 UnixStream::UnixStream(fiber::event::EventLoop &loop, int fd, UnixAddress peer)
     : stream_(loop, fd), remote_addr_(std::move(peer)) {
+}
+
+UnixStream::UnixStream(ConnectInfant &&infant)
+    : stream_(infant.loop(), infant.release_fd()), remote_addr_(infant.take_peer()) {
 }
 
 UnixStream::~UnixStream() {

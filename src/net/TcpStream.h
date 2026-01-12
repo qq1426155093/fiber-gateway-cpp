@@ -5,13 +5,24 @@
 #include <sys/uio.h>
 #include <utility>
 
+#include "../common/IoError.h"
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
 #include "../event/EventLoop.h"
 #include "SocketAddress.h"
+#include "detail/ConnectFd.h"
 #include "detail/StreamFd.h"
 
 namespace fiber::net {
+
+class TcpStream;
+
+struct TcpConnectTraits {
+    using Address = SocketAddress;
+
+    static fiber::common::IoResult<int> create_socket(const Address &peer);
+    static fiber::common::IoErr connect_once(int fd, const Address &peer);
+};
 
 class TcpStream : public common::NonCopyable, public common::NonMovable {
 public:
@@ -19,11 +30,15 @@ public:
     using WriteAwaiter = detail::StreamFd::WriteAwaiter;
     using ReadvAwaiter = detail::StreamFd::ReadvAwaiter;
     using WritevAwaiter = detail::StreamFd::WritevAwaiter;
+    using ConnectAwaiter = detail::ConnectFd<TcpConnectTraits>::ConnectAwaiter;
+    using ConnectInfant = detail::StreamInfant<TcpConnectTraits>;
 
     TcpStream(fiber::event::EventLoop &loop, int fd);
     TcpStream(fiber::event::EventLoop &loop, int fd, SocketAddress peer);
+    TcpStream(ConnectInfant &&infant);
     ~TcpStream();
 
+    [[nodiscard]] static ConnectAwaiter connect(fiber::event::EventLoop &loop, const SocketAddress &peer) noexcept;
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] int fd() const noexcept;
     [[nodiscard]] const SocketAddress &remote_addr() const noexcept;
