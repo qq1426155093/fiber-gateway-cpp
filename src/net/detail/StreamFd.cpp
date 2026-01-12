@@ -48,67 +48,30 @@ void StreamFd::close() {
         watching_ = fiber::event::IoEvent::None;
     }
     if (local_read_waiter_) {
-        if (read_cross_waiting_) {
-            auto *waiter = cross_read_waiter_;
-            cross_read_waiter_ = nullptr;
-            read_cross_waiting_ = false;
-            if (waiter) {
-                WaiterState expected = WaiterState::Notify_Watch;
-                if (waiter->state_.compare_exchange_strong(expected, WaiterState::Notify_Resume,
-                                                           std::memory_order_acq_rel)) {
-                    waiter->err_ = fiber::common::IoErr::Canceled;
-                    waiter->state_.store(WaiterState::Notify_Resume, std::memory_order_release);
-                    waiter->retain();
-                    waiter->loop_
-                            ->post<CrossThreadWaiter, &CrossThreadWaiter::notify_entry_,
-                                   &CrossThreadWaiter::on_notify_resume, &CrossThreadWaiter::on_notify_resume_cancel>(
-                                    *waiter);
-                }
-            }
-        } else {
-            auto *waiter = local_read_waiter_;
+        if (local_read_waiting_) {
+            LocalThreadWaiter *waiter = local_read_waiter_;
             local_read_waiter_ = nullptr;
-            read_cross_waiting_ = false;
-            if (waiter) {
-                waiter->err_ = fiber::common::IoErr::Canceled;
-                auto handle = waiter->coro_;
-                waiter->coro_ = {};
-                if (handle) {
-                    handle.resume();
-                }
-            }
+            waiter->err_ = fiber::common::IoErr::Canceled;
+            waiter->coro_.resume();
+        } else {
+            CrossThreadWaiter *waiter = cross_read_waiter_;
+            cross_read_waiter_ = nullptr;
+            waiter->err_ = fiber::common::IoErr::Canceled;
+            CrossThreadWaiter::do_notify_resume(waiter);
         }
     }
+
     if (local_write_waiter_) {
-        if (write_cross_waiting_) {
-            auto *waiter = cross_write_waiter_;
-            cross_write_waiter_ = nullptr;
-            write_cross_waiting_ = false;
-            if (waiter) {
-                WaiterState expected = WaiterState::Notify_Watch;
-                if (waiter->state_.compare_exchange_strong(expected, WaiterState::Notify_Resume,
-                                                           std::memory_order_acq_rel)) {
-                    waiter->err_ = fiber::common::IoErr::Canceled;
-                    waiter->state_.store(WaiterState::Notify_Resume, std::memory_order_release);
-                    waiter->retain();
-                    waiter->loop_
-                            ->post<CrossThreadWaiter, &CrossThreadWaiter::notify_entry_,
-                                   &CrossThreadWaiter::on_notify_resume, &CrossThreadWaiter::on_notify_resume_cancel>(
-                                    *waiter);
-                }
-            }
-        } else {
-            auto *waiter = local_write_waiter_;
+        if (local_write_waiting_) {
+            LocalThreadWaiter *waiter = local_write_waiter_;
             local_write_waiter_ = nullptr;
-            write_cross_waiting_ = false;
-            if (waiter) {
-                waiter->err_ = fiber::common::IoErr::Canceled;
-                auto handle = waiter->coro_;
-                waiter->coro_ = {};
-                if (handle) {
-                    handle.resume();
-                }
-            }
+            waiter->err_ = fiber::common::IoErr::Canceled;
+            waiter->coro_.resume();
+        } else {
+            CrossThreadWaiter *waiter = cross_write_waiter_;
+            cross_write_waiter_ = nullptr;
+            waiter->err_ = fiber::common::IoErr::Canceled;
+            CrossThreadWaiter::do_notify_resume(waiter);
         }
     }
     int fd = fd_;
@@ -232,8 +195,10 @@ void StreamFd::CrossThreadWaiter::on_notify_cancel(CrossThreadWaiter *waiter) {
         } else {
             stream->cancel_event<fiber::event::IoEvent::Write, CrossThreadWaiter>(waiter);
         }
+    } else {
+        FIBER_ASSERT(state == WaiterState::Waiting_Cancel);
     }
-    FIBER_ASSERT(state == WaiterState::Waiting_Cancel);
+
     delete waiter;
 }
 void StreamFd::CrossThreadWaiter::cancel_wait() noexcept {

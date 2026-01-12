@@ -19,7 +19,8 @@ namespace fiber::net::detail {
 /**
  * forbidden read/write in multi-coroutine ,but read and write can overlap.
  * we do not add std::atomic_bool read_occupied_, write_occupied_ member for performance.
- * undefined behaver will occur if violate this constraint.
+ * cannot close StreamFd if some coroutine watching events. which cause crash.
+ * undefined behaver will occur if deviate this constraint.
  */
 class StreamFd : public common::NonCopyable, public common::NonMovable {
 public:
