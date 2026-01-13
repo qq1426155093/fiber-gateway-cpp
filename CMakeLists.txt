@@ -25,17 +25,12 @@ project(fiber)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 file(GLOB_RECURSE CPP_SRC_LIST ${CMAKE_CURRENT_LIST_DIR}/src/*.cpp)
-set(MAIN_SRC ${CMAKE_CURRENT_LIST_DIR}/src/main.cpp)
-list(REMOVE_ITEM CPP_SRC_LIST ${MAIN_SRC})
 
-add_library(fiber_lib ${CPP_SRC_LIST})
+add_library(fiber_lib STATIC ${CPP_SRC_LIST})
 target_include_directories(fiber_lib PUBLIC ${CMAKE_CURRENT_LIST_DIR}/src)
 if (FIBER_USE_LIBCXX)
     target_link_options(fiber_lib INTERFACE ${FIBER_STDLIB_LINK_FLAGS})
 endif()
-
-add_executable(fiber ${MAIN_SRC})
-target_link_libraries(fiber PRIVATE fiber_lib)
 
 option(FIBER_ENABLE_LTO "Enable LTO/IPO for fiber targets" ON)
 set(FIBER_IPO_SUPPORTED FALSE)
@@ -44,11 +39,20 @@ if (FIBER_ENABLE_LTO)
     check_ipo_supported(RESULT FIBER_IPO_SUPPORTED OUTPUT FIBER_IPO_ERROR)
     if (FIBER_IPO_SUPPORTED)
         set_property(TARGET fiber_lib PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
-        set_property(TARGET fiber PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
     else()
         message(STATUS "IPO/LTO not supported: ${FIBER_IPO_ERROR}")
     endif()
 endif()
+
+file(GLOB EXAMPLE_SRC_LIST ${CMAKE_CURRENT_LIST_DIR}/example/*.cpp)
+foreach(EXAMPLE_SRC IN LISTS EXAMPLE_SRC_LIST)
+    get_filename_component(EXAMPLE_NAME ${EXAMPLE_SRC} NAME_WE)
+    add_executable(${EXAMPLE_NAME} ${EXAMPLE_SRC})
+    target_link_libraries(${EXAMPLE_NAME} PRIVATE fiber_lib)
+    if (FIBER_ENABLE_LTO AND FIBER_IPO_SUPPORTED)
+        set_property(TARGET ${EXAMPLE_NAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+    endif()
+endforeach()
 
 option(FIBER_BUILD_TESTS "Build tests" ON)
 option(FIBER_FETCH_DEPS "Allow CMake to download third-party dependencies" OFF)
@@ -69,47 +73,44 @@ if(FIBER_BUILD_TESTS)
         endif()
     endif()
     if (GTest_FOUND OR TARGET GTest::gtest_main)
-        set(FIBER_BUILD_TESTS ON)
-    else()
-        set(FIBER_BUILD_TESTS OFF)
-    endif()
-    if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        if (TARGET gtest)
-            target_compile_options(gtest PRIVATE -Wno-character-conversion)
+        if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+            if (TARGET gtest)
+                target_compile_options(gtest PRIVATE -Wno-character-conversion)
+            endif()
+            if (TARGET gtest_main)
+                target_compile_options(gtest_main PRIVATE -Wno-character-conversion)
+            endif()
         endif()
-        if (TARGET gtest_main)
-            target_compile_options(gtest_main PRIVATE -Wno-character-conversion)
-        endif()
-    endif()
 
-    enable_testing()
-    add_executable(fiber_tests
-        tests/ArrayTest.cpp
-        tests/SanityTest.cpp
-        tests/GeneratorTest.cpp
-        tests/IteratorTest.cpp
-        tests/JsValueOpsTest.cpp
-        tests/JsValueEncodeTest.cpp
-        tests/ParserTest.cpp
-        tests/ScriptParserTest.cpp
-        tests/ScriptCompilerTest.cpp
-        tests/ScriptRuntimeOpsTest.cpp
-        tests/ScriptExecutionTest.cpp
-        tests/ScriptPlanTest.cpp
-        tests/ThreadGroupTest.cpp
-        tests/EventLoopTest.cpp
-        tests/SleepTest.cpp
-        tests/MutexTest.cpp
-        tests/SignalTest.cpp
-        tests/TcpListenerTest.cpp
-        tests/TcpStreamTest.cpp
-        tests/UnixStreamTest.cpp
-        tests/IpAddressTest.cpp
-    )
-    target_link_libraries(fiber_tests PRIVATE fiber_lib GTest::gtest_main)
-    if (FIBER_ENABLE_LTO AND FIBER_IPO_SUPPORTED)
-        set_property(TARGET fiber_tests PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+        enable_testing()
+        add_executable(fiber_tests
+            tests/ArrayTest.cpp
+            tests/SanityTest.cpp
+            tests/GeneratorTest.cpp
+            tests/IteratorTest.cpp
+            tests/JsValueOpsTest.cpp
+            tests/JsValueEncodeTest.cpp
+            tests/ParserTest.cpp
+            tests/ScriptParserTest.cpp
+            tests/ScriptCompilerTest.cpp
+            tests/ScriptRuntimeOpsTest.cpp
+            tests/ScriptExecutionTest.cpp
+            tests/ScriptPlanTest.cpp
+            tests/ThreadGroupTest.cpp
+            tests/EventLoopTest.cpp
+            tests/SleepTest.cpp
+            tests/MutexTest.cpp
+            tests/SignalTest.cpp
+            tests/TcpListenerTest.cpp
+            tests/TcpStreamTest.cpp
+            tests/UnixStreamTest.cpp
+            tests/IpAddressTest.cpp
+        )
+        target_link_libraries(fiber_tests PRIVATE fiber_lib GTest::gtest_main)
+        if (FIBER_ENABLE_LTO AND FIBER_IPO_SUPPORTED)
+            set_property(TARGET fiber_tests PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+        endif()
+        include(GoogleTest)
+        gtest_discover_tests(fiber_tests)
     endif()
-    include(GoogleTest)
-    gtest_discover_tests(fiber_tests)
 endif()
