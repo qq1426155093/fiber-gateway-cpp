@@ -6,7 +6,6 @@
 #include <string>
 #include <unistd.h>
 
-#include "async/CoroutinePromiseBase.h"
 #include "async/Spawn.h"
 #include "common/IoError.h"
 #include "event/EventLoopGroup.h"
@@ -16,42 +15,7 @@
 
 namespace {
 
-class DetachedTask {
-public:
-    struct promise_type : fiber::async::CoroutinePromiseBase {
-        DetachedTask get_return_object() {
-            return {};
-        }
-
-        std::suspend_never initial_suspend() noexcept {
-            return {};
-        }
-
-        struct FinalAwaiter {
-            bool await_ready() noexcept {
-                return false;
-            }
-
-            void await_suspend(std::coroutine_handle<promise_type> handle) noexcept {
-                handle.destroy();
-            }
-
-            void await_resume() noexcept {
-            }
-        };
-
-        FinalAwaiter final_suspend() noexcept {
-            return {};
-        }
-
-        void return_void() noexcept {
-        }
-
-        void unhandled_exception() {
-            std::terminate();
-        }
-    };
-};
+using DetachedTask = fiber::async::DetachedTask;
 
 std::string make_socket_path() {
     char pattern[] = "/tmp/fiber_unix_stream_test_XXXXXX";
@@ -127,7 +91,7 @@ TEST(UnixStreamTest, ConnectsWithAwaiter) {
     auto connect_future = connect_promise.get_future();
 
     fiber::async::spawn(group.at(0), [&]() {
-        accept_once(&group.at(0), address, &ready_promise, &accept_promise);
+        return accept_once(&group.at(0), address, &ready_promise, &accept_promise);
     });
 
     if (ready_future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
@@ -141,7 +105,7 @@ TEST(UnixStreamTest, ConnectsWithAwaiter) {
     ASSERT_TRUE(ready_result);
 
     fiber::async::spawn(group.at(1), [&]() {
-        connect_client(&group.at(1), address, &connect_promise);
+        return connect_client(&group.at(1), address, &connect_promise);
     });
 
     if (connect_future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {

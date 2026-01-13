@@ -15,42 +15,7 @@
 
 namespace {
 
-class DetachedTask {
-public:
-    struct promise_type : fiber::async::CoroutinePromiseBase {
-        DetachedTask get_return_object() {
-            return {};
-        }
-
-        std::suspend_never initial_suspend() noexcept {
-            return {};
-        }
-
-        struct FinalAwaiter {
-            bool await_ready() noexcept {
-                return false;
-            }
-
-            void await_suspend(std::coroutine_handle<promise_type> handle) noexcept {
-                handle.destroy();
-            }
-
-            void await_resume() noexcept {
-            }
-        };
-
-        FinalAwaiter final_suspend() noexcept {
-            return {};
-        }
-
-        void return_void() noexcept {
-        }
-
-        void unhandled_exception() {
-            std::terminate();
-        }
-    };
-};
+using DetachedTask = fiber::async::DetachedTask;
 
 class ManualTask {
 public:
@@ -180,6 +145,7 @@ TEST(MutexTest, ResumesWaiterAfterUnlock) {
     fiber::async::spawn(group.at(0), [&mutex, &state, &promise]() {
         hold_lock(&mutex, &state);
         wait_lock(&mutex, &state, &promise);
+        return DetachedTask{};
     });
 
     if (future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
@@ -208,6 +174,7 @@ TEST(MutexTest, CancelWaiterDoesNotResume) {
         auto handle = waiter.release();
         handle.resume();
         handle.destroy();
+        return DetachedTask{};
     });
 
     if (future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
@@ -236,9 +203,11 @@ TEST(MutexTest, ResumesOnWaiterLoopThread) {
     group.start();
     fiber::async::spawn(group.at(0), [&loop0_id]() {
         loop0_id.set_value(std::this_thread::get_id());
+        return DetachedTask{};
     });
     fiber::async::spawn(group.at(1), [&loop1_id]() {
         loop1_id.set_value(std::this_thread::get_id());
+        return DetachedTask{};
     });
 
     if (loop0_future.wait_for(std::chrono::seconds(2)) != std::future_status::ready ||
@@ -250,7 +219,7 @@ TEST(MutexTest, ResumesOnWaiterLoopThread) {
     }
 
     fiber::async::spawn(group.at(0), [&mutex, &locked]() {
-        hold_lock_with_signal(&mutex, &locked, std::chrono::milliseconds(50));
+        return hold_lock_with_signal(&mutex, &locked, std::chrono::milliseconds(50));
     });
 
     if (locked_future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
@@ -261,7 +230,7 @@ TEST(MutexTest, ResumesOnWaiterLoopThread) {
     }
 
     fiber::async::spawn(group.at(1), [&mutex, &resumed]() {
-        wait_lock_thread(&mutex, &resumed);
+        return wait_lock_thread(&mutex, &resumed);
     });
 
     if (resumed_future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {

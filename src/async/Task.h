@@ -8,8 +8,8 @@
 #include <string>
 #include <utility>
 
-#include "../../async/CoroutinePromiseBase.h"
-#include "../../common/Assert.h"
+#include "CoroutinePromiseBase.h"
+#include "../common/Assert.h"
 
 namespace fiber::script::async {
 

@@ -13,7 +13,7 @@
 
 namespace fiber::net::detail {
 
-template <typename Traits>
+template<typename Traits>
 class AcceptFd : public common::NonCopyable, public common::NonMovable {
 public:
     using Address = typename Traits::Address;
@@ -38,8 +38,7 @@ public:
         FIBER_ASSERT(false);
     }
 
-    fiber::common::IoResult<void> bind(const Address &addr,
-                                       const ListenOptions &options) {
+    fiber::common::IoResult<void> bind(const Address &addr, const ListenOptions &options) {
         if (fd_ >= 0) {
             return std::unexpected(fiber::common::IoErr::Already);
         }
@@ -51,13 +50,9 @@ public:
         return {};
     }
 
-    [[nodiscard]] bool valid() const noexcept {
-        return fd_ >= 0;
-    }
+    [[nodiscard]] bool valid() const noexcept { return fd_ >= 0; }
 
-    [[nodiscard]] int fd() const noexcept {
-        return fd_;
-    }
+    [[nodiscard]] int fd() const noexcept { return fd_; }
 
     void close() {
         FIBER_ASSERT(loop_.in_loop());
@@ -84,9 +79,7 @@ public:
         }
     }
 
-    [[nodiscard]] AcceptAwaiter accept() noexcept {
-        return AcceptAwaiter(*this);
-    }
+    [[nodiscard]] AcceptAwaiter accept() noexcept { return AcceptAwaiter(*this); }
 
 private:
     friend class AcceptAwaiter;
@@ -95,22 +88,14 @@ private:
         AcceptFd *acceptor = nullptr;
     };
 
-    bool begin_wait(AcceptAwaiter *awaiter, std::coroutine_handle<> handle) {
+    bool begin_wait(AcceptAwaiter *awaiter) {
         FIBER_ASSERT(loop_.in_loop());
         if (!awaiter) {
             return false;
         }
-        awaiter->handle_ = handle;
         awaiter->result_ = AcceptResult{};
         if (fd_ < 0) {
             awaiter->result_ = std::unexpected(fiber::common::IoErr::BadFd);
-            return false;
-        }
-        void *owner = handle.address();
-        if (!owner_) {
-            owner_ = owner;
-        } else if (owner_ != owner) {
-            awaiter->result_ = std::unexpected(fiber::common::IoErr::Busy);
             return false;
         }
         if (waiter_) {
@@ -127,8 +112,7 @@ private:
             awaiter->result_ = std::unexpected(err);
             return false;
         }
-        fiber::common::IoErr watch_err = fiber::common::IoErr::None;
-        watch_read(&watch_err);
+        fiber::common::IoErr watch_err = watch_read();
         if (watch_err != fiber::common::IoErr::None) {
             awaiter->result_ = std::unexpected(watch_err);
             return false;
@@ -140,32 +124,22 @@ private:
 
     void cancel_wait(AcceptAwaiter *awaiter) {
         FIBER_ASSERT(loop_.in_loop());
-        if (waiter_ != awaiter) {
-            return;
-        }
+        FIBER_ASSERT(awaiter == waiter_);
         waiter_ = nullptr;
         awaiter->waiting_ = false;
-        awaiter->handle_ = {};
         unwatch_read();
     }
 
-    void watch_read(fiber::common::IoErr *error_out) {
+    fiber::common::IoErr watch_read() {
         if (watching_) {
-            if (error_out) {
-                *error_out = fiber::common::IoErr::None;
-            }
-            return;
+            return fiber::common::IoErr::None;
         }
-        if (loop_.poller().add(fd_, fiber::event::IoEvent::Read, &item_) != 0) {
-            if (error_out) {
-                *error_out = fiber::common::io_err_from_errno(errno);
-            }
-            return;
+        fiber::common::IoErr err = loop_.poller().add(fd_, fiber::event::IoEvent::Read, &item_);
+        if (err != fiber::common::IoErr::None) {
+            return err;
         }
         watching_ = true;
-        if (error_out) {
-            *error_out = fiber::common::IoErr::None;
-        }
+        return fiber::common::IoErr::None;
     }
 
     void unwatch_read() {
@@ -195,16 +169,10 @@ private:
         } else {
             waiter->result_ = std::unexpected(err);
         }
-        auto handle = waiter->handle_;
-        waiter->handle_ = {};
-        if (handle) {
-            handle.resume();
-        }
+        waiter->handle_.resume();
     }
 
-    static void on_acceptable(fiber::event::Poller::Item *item,
-                              int fd,
-                              fiber::event::IoEvent events) {
+    static void on_acceptable(fiber::event::Poller::Item *item, int fd, fiber::event::IoEvent events) {
         (void) fd;
         (void) events;
         auto *entry = static_cast<AcceptItem *>(item);
@@ -221,14 +189,12 @@ private:
     int fd_ = kInvalidFd;
     bool watching_ = false;
     AcceptAwaiter *waiter_ = nullptr;
-    void *owner_ = nullptr;
 };
 
-template <typename Traits>
+template<typename Traits>
 class AcceptFd<Traits>::AcceptAwaiter {
 public:
-    explicit AcceptAwaiter(AcceptFd &acceptor) noexcept : acceptor_(&acceptor) {
-    }
+    explicit AcceptAwaiter(AcceptFd &acceptor) noexcept : acceptor_(&acceptor) {}
 
     AcceptAwaiter(const AcceptAwaiter &) = delete;
     AcceptAwaiter &operator=(const AcceptAwaiter &) = delete;
@@ -236,27 +202,21 @@ public:
     AcceptAwaiter &operator=(AcceptAwaiter &&) = delete;
 
     ~AcceptAwaiter() {
-        if (!acceptor_ || !waiting_) {
+        if (!waiting_) {
             return;
         }
         FIBER_ASSERT(acceptor_->loop_.in_loop());
         acceptor_->cancel_wait(this);
     }
 
-    bool await_ready() noexcept {
-        return false;
-    }
+    bool await_ready() noexcept { return false; }
 
     bool await_suspend(std::coroutine_handle<> handle) {
-        if (!acceptor_) {
-            return false;
-        }
-        return acceptor_->begin_wait(this, handle);
+        handle_ = handle;
+        return acceptor_->begin_wait(this);
     }
 
-    fiber::common::IoResult<AcceptResult> await_resume() noexcept {
-        return result_;
-    }
+    fiber::common::IoResult<AcceptResult> await_resume() noexcept { return result_; }
 
 private:
     friend class AcceptFd;

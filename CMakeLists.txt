@@ -51,14 +51,28 @@ if (FIBER_ENABLE_LTO)
 endif()
 
 option(FIBER_BUILD_TESTS "Build tests" ON)
+option(FIBER_FETCH_DEPS "Allow CMake to download third-party dependencies" OFF)
 if(FIBER_BUILD_TESTS)
-    include(FetchContent)
-    FetchContent_Declare(
-        googletest
-        URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
-    )
-    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(googletest)
+    find_package(GTest QUIET)
+    if (NOT GTest_FOUND)
+        if (FIBER_FETCH_DEPS)
+            include(FetchContent)
+            set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
+            FetchContent_Declare(
+                googletest
+                URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+            )
+            set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+            FetchContent_MakeAvailable(googletest)
+        else()
+            message(STATUS "GoogleTest not found. Set FIBER_FETCH_DEPS=ON or install GTest to build tests.")
+        endif()
+    endif()
+    if (GTest_FOUND OR TARGET GTest::gtest_main)
+        set(FIBER_BUILD_TESTS ON)
+    else()
+        set(FIBER_BUILD_TESTS OFF)
+    endif()
     if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         if (TARGET gtest)
             target_compile_options(gtest PRIVATE -Wno-character-conversion)

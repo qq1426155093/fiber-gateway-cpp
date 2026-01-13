@@ -32,13 +32,11 @@ struct LocalThreadWaiter : WaiterBase {};
 struct CrossThreadWaiter;
 
 template<typename T>
-concept StreamWaiter =
-    std::same_as<std::remove_cvref_t<T>, LocalThreadWaiter> ||
-    std::same_as<std::remove_cvref_t<T>, CrossThreadWaiter>;
+concept StreamWaiter = std::same_as<std::remove_cvref_t<T>, LocalThreadWaiter> ||
+                       std::same_as<std::remove_cvref_t<T>, CrossThreadWaiter>;
 
 template<fiber::event::IoEvent Event>
-concept ReadWriteEvent =
-    (Event == fiber::event::IoEvent::Read || Event == fiber::event::IoEvent::Write);
+concept ReadWriteEvent = (Event == fiber::event::IoEvent::Read || Event == fiber::event::IoEvent::Write);
 
 /**
  * forbidden read/write in multi-coroutine ,but read and write can overlap.
@@ -154,14 +152,17 @@ private:
         FIBER_ASSERT((watching_ & Event) == fiber::event::IoEvent::None);
         fiber::event::IoEvent desired = watching_ | Event;
 
-        int rc = 0;
-        if (watching_ == fiber::event::IoEvent::None) {
-            rc = loop_.poller().add(fd_, desired, &item_);
+        fiber::common::IoErr rc = fiber::common::IoErr::None;
+        if (!registered_) {
+            rc = loop_.poller().add(fd_, desired, &item_, fiber::event::Poller::Mode::OneShot);
+            if (rc == fiber::common::IoErr::None) {
+                registered_ = true;
+            }
         } else {
-            rc = loop_.poller().mod(fd_, desired, &item_);
+            rc = loop_.poller().mod(fd_, desired, &item_, fiber::event::Poller::Mode::OneShot);
         }
-        if (rc != 0) {
-            return fiber::common::io_err_from_errno(errno);
+        if (rc != fiber::common::IoErr::None) {
+            return rc;
         }
         watching_ = desired;
         auto &local_waiter = local_waiter_slot<Event>();
@@ -177,27 +178,26 @@ private:
         }
         return fiber::common::IoErr::None;
     }
+
     template<fiber::event::IoEvent Event, typename Waiter>
         requires(ReadWriteEvent<Event> && StreamWaiter<Waiter>)
     fiber::common::IoErr cancel_event(Waiter *waiter) noexcept {
         FIBER_ASSERT(loop_.in_loop());
-        if (!waiter) {
-            return fiber::common::IoErr::Invalid;
-        }
+        FIBER_ASSERT(waiter);
         auto &local_waiter = local_waiter_slot<Event>();
         FIBER_ASSERT(static_cast<void *>(local_waiter) == static_cast<void *>(waiter));
         local_waiter = nullptr;
+        local_waiting_slot<Event>() = false;
         fiber::event::IoEvent desired = watching_ & ~Event;
         if (desired == watching_) {
             return fiber::common::IoErr::None;
         }
-        if (desired == fiber::event::IoEvent::None) {
-            loop_.poller().del(fd_);
-        } else {
-            loop_.poller().mod(fd_, desired, &item_);
+        fiber::common::IoErr io_err = common::IoErr::None;
+        if (registered_ && desired != fiber::event::IoEvent::None) {
+            io_err = loop_.poller().mod(fd_, desired, &item_, fiber::event::Poller::Mode::OneShot);
         }
         watching_ = desired;
-        return fiber::common::IoErr::None;
+        return io_err;
     }
 
 
@@ -220,6 +220,7 @@ private:
     StreamItem item_{};
     int fd_ = -1;
     fiber::event::IoEvent watching_ = fiber::event::IoEvent::None;
+    bool registered_ = false;
     // std::atomic_bool read_occupied_{false}; // reading lock, forbidden concurrent
     // std::atomic_bool write_occupied_{false}; // writing lock, forbidden concurrent
 

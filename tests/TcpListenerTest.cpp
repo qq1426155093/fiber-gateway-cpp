@@ -8,7 +8,6 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "async/CoroutinePromiseBase.h"
 #include "async/Spawn.h"
 #include "common/IoError.h"
 #include "event/EventLoopGroup.h"
@@ -17,42 +16,7 @@
 
 namespace {
 
-class DetachedTask {
-public:
-    struct promise_type : fiber::async::CoroutinePromiseBase {
-        DetachedTask get_return_object() {
-            return {};
-        }
-
-        std::suspend_never initial_suspend() noexcept {
-            return {};
-        }
-
-        struct FinalAwaiter {
-            bool await_ready() noexcept {
-                return false;
-            }
-
-            void await_suspend(std::coroutine_handle<promise_type> handle) noexcept {
-                handle.destroy();
-            }
-
-            void await_resume() noexcept {
-            }
-        };
-
-        FinalAwaiter final_suspend() noexcept {
-            return {};
-        }
-
-        void return_void() noexcept {
-        }
-
-        void unhandled_exception() {
-            std::terminate();
-        }
-    };
-};
+using DetachedTask = fiber::async::DetachedTask;
 
 DetachedTask accept_once(fiber::event::EventLoop *loop,
                          fiber::net::TcpListener **out_listener,
@@ -128,7 +92,7 @@ TEST(TcpListenerTest, AcceptsConnection) {
     fiber::net::TcpListener *listener = nullptr;
 
     fiber::async::spawn(group.at(0), [&]() {
-        accept_once(&group.at(0), &listener, &port_promise, &accept_promise);
+        return accept_once(&group.at(0), &listener, &port_promise, &accept_promise);
     });
 
     uint16_t port = port_future.get();
@@ -168,7 +132,7 @@ TEST(TcpListenerTest, OwnerMismatchReturnsBusy) {
     fiber::net::TcpListener *listener = nullptr;
 
     fiber::async::spawn(group.at(0), [&]() {
-        accept_once(&group.at(0), &listener, &port_promise, &accept_promise);
+        return accept_once(&group.at(0), &listener, &port_promise, &accept_promise);
     });
 
     uint16_t port = port_future.get();
@@ -176,7 +140,7 @@ TEST(TcpListenerTest, OwnerMismatchReturnsBusy) {
     ASSERT_NE(listener, nullptr);
 
     fiber::async::spawn(group.at(0), [&]() {
-        expect_busy(listener, &busy_promise);
+        return expect_busy(listener, &busy_promise);
     });
 
     int client = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);

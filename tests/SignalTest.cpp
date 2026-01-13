@@ -29,42 +29,7 @@ fiber::async::SignalSet block_signals(std::initializer_list<int> sigs) {
     return mask;
 }
 
-class DetachedTask {
-public:
-    struct promise_type : fiber::async::CoroutinePromiseBase {
-        DetachedTask get_return_object() {
-            return {};
-        }
-
-        std::suspend_never initial_suspend() noexcept {
-            return {};
-        }
-
-        struct FinalAwaiter {
-            bool await_ready() noexcept {
-                return false;
-            }
-
-            void await_suspend(std::coroutine_handle<promise_type> handle) noexcept {
-                handle.destroy();
-            }
-
-            void await_resume() noexcept {
-            }
-        };
-
-        FinalAwaiter final_suspend() noexcept {
-            return {};
-        }
-
-        void return_void() noexcept {
-        }
-
-        void unhandled_exception() {
-            std::terminate();
-        }
-    };
-};
+using DetachedTask = fiber::async::DetachedTask;
 
 class ManualTask {
 public:
@@ -183,9 +148,9 @@ TEST(SignalTest, SingleWaiterReceivesSignal) {
         attached.set_value();
         if (!ok) {
             fiber::event::EventLoop::current().stop();
-            return;
+            return DetachedTask{};
         }
-        wait_once(&promise, &service, SIGUSR1);
+        return wait_once(&promise, &service, SIGUSR1);
     });
 
     if (attached_future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
@@ -224,8 +189,9 @@ TEST(SignalTest, PendingBeforeAwait) {
         attached.set_value();
         if (!ok) {
             fiber::event::EventLoop::current().stop();
-            return;
+            return DetachedTask{};
         }
+        return DetachedTask{};
     });
 
     if (attached_future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
@@ -238,7 +204,7 @@ TEST(SignalTest, PendingBeforeAwait) {
     ::kill(getpid(), SIGUSR1);
 
     fiber::async::spawn(group.at(0), [&]() {
-        wait_once(&promise, &service, SIGUSR1);
+        return wait_once(&promise, &service, SIGUSR1);
     });
 
     if (future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
@@ -272,11 +238,12 @@ TEST(SignalTest, FifoFairness) {
         attached.set_value();
         if (!ok) {
             fiber::event::EventLoop::current().stop();
-            return;
+            return DetachedTask{};
         }
         wait_and_record(&order, &seen, 1, &first_ready, &service, false);
         wait_and_record(&order, &seen, 2, &done, &service, true);
         ::kill(getpid(), SIGUSR1);
+        return DetachedTask{};
     });
 
     if (attached_future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
@@ -323,13 +290,14 @@ TEST(SignalTest, CancelOnDestroy) {
         if (!ok) {
             ready.set_value();
             fiber::event::EventLoop::current().stop();
-            return;
+            return DetachedTask{};
         }
         auto task = wait_and_hit(&hits);
         auto handle = task.release();
         handle.resume();
         handle.destroy();
         ready.set_value();
+        return DetachedTask{};
     });
 
     if (ready_future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
@@ -345,6 +313,7 @@ TEST(SignalTest, CancelOnDestroy) {
         service.detach();
         fiber::event::EventLoop::current().stop();
         stopped.set_value();
+        return DetachedTask{};
     });
 
     if (stopped_future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {

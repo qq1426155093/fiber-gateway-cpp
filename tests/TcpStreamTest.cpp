@@ -11,7 +11,6 @@
 #include <sys/uio.h>
 #include <unistd.h>
 
-#include "async/CoroutinePromiseBase.h"
 #include "async/Spawn.h"
 #include "common/IoError.h"
 #include "event/EventLoopGroup.h"
@@ -21,42 +20,7 @@
 
 namespace {
 
-class DetachedTask {
-public:
-    struct promise_type : fiber::async::CoroutinePromiseBase {
-        DetachedTask get_return_object() {
-            return {};
-        }
-
-        std::suspend_never initial_suspend() noexcept {
-            return {};
-        }
-
-        struct FinalAwaiter {
-            bool await_ready() noexcept {
-                return false;
-            }
-
-            void await_suspend(std::coroutine_handle<promise_type> handle) noexcept {
-                handle.destroy();
-            }
-
-            void await_resume() noexcept {
-            }
-        };
-
-        FinalAwaiter final_suspend() noexcept {
-            return {};
-        }
-
-        void return_void() noexcept {
-        }
-
-        void unhandled_exception() {
-            std::terminate();
-        }
-    };
-};
+using DetachedTask = fiber::async::DetachedTask;
 
 fiber::common::IoResult<uint16_t> resolve_port(int fd) {
     sockaddr_storage bound{};
@@ -437,7 +401,7 @@ TEST(TcpStreamTest, ReadWriteRoundTrip) {
     const std::string response = "pong";
 
     fiber::async::spawn(group.at(0), [&]() {
-        read_write_server(&group.at(0), &port_promise, &read_promise, &write_promise, request, response);
+        return read_write_server(&group.at(0), &port_promise, &read_promise, &write_promise, request, response);
     });
 
     uint16_t port = port_future.get();
@@ -495,7 +459,7 @@ TEST(TcpStreamTest, ConnectsWithAwaiter) {
     const std::string response = "pong";
 
     fiber::async::spawn(group.at(0), [&]() {
-        read_write_server(&group.at(0), &port_promise, &read_promise, &write_promise, request, response);
+        return read_write_server(&group.at(0), &port_promise, &read_promise, &write_promise, request, response);
     });
 
     uint16_t port = port_future.get();
@@ -503,7 +467,7 @@ TEST(TcpStreamTest, ConnectsWithAwaiter) {
 
     fiber::net::SocketAddress target(fiber::net::IpAddress::loopback_v4(), port);
     fiber::async::spawn(group.at(1), [&]() {
-        connect_client(&group.at(1), target, &response_promise, request, response);
+        return connect_client(&group.at(1), target, &response_promise, request, response);
     });
 
     if (response_future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
@@ -553,14 +517,14 @@ TEST(TcpStreamTest, ReadvWritevRoundTrip) {
     const std::string response_part2 = "there";
 
     fiber::async::spawn(group.at(0), [&]() {
-        readv_writev_server(&group.at(0),
-                            &port_promise,
-                            &read_promise,
-                            &write_promise,
-                            request_part1,
-                            request_part2,
-                            response_part1,
-                            response_part2);
+        return readv_writev_server(&group.at(0),
+                                   &port_promise,
+                                   &read_promise,
+                                   &write_promise,
+                                   request_part1,
+                                   request_part2,
+                                   response_part1,
+                                   response_part2);
     });
 
     uint16_t port = port_future.get();

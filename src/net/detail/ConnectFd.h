@@ -153,8 +153,9 @@ public:
             return false;
         }
 
-        if (loop_->poller().add(fd_, fiber::event::IoEvent::Write, &item_) != 0) {
-            result_ = std::unexpected(fiber::common::io_err_from_errno(errno));
+        fiber::common::IoErr watch_err = loop_->poller().add(fd_, fiber::event::IoEvent::Write, &item_);
+        if (watch_err != fiber::common::IoErr::None) {
+            result_ = std::unexpected(watch_err);
             close_fd();
             return false;
         }

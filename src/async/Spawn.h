@@ -10,10 +10,26 @@
 
 #include "../common/Assert.h"
 #include "../event/EventLoop.h"
+#include "CoroutinePromiseBase.h"
 
 namespace fiber::async {
 
-template <typename H>
+class DetachedTask {
+public:
+    struct promise_type : CoroutinePromiseBase {
+        DetachedTask get_return_object() noexcept { return {}; }
+
+        std::suspend_never initial_suspend() noexcept { return {}; }
+
+        std::suspend_never final_suspend() noexcept { return {}; }
+
+        void return_void() noexcept {}
+
+        void unhandled_exception() { FIBER_PANIC("error in spawn"); }
+    };
+};
+
+template<typename H>
 concept CoroutineHandleLike = requires(H handle) {
     { handle.resume() } -> std::same_as<void>;
     { handle.done() } -> std::same_as<bool>;
@@ -21,20 +37,19 @@ concept CoroutineHandleLike = requires(H handle) {
     { static_cast<bool>(handle) } -> std::same_as<bool>;
 };
 
-template <typename F>
-concept SpawnFactory = std::invocable<F &> &&
-                       (std::is_void_v<std::invoke_result_t<F &>> ||
-                        CoroutineHandleLike<std::invoke_result_t<F &>>);
+template<typename F>
+concept SpawnFactory =
+        std::invocable<F &> && (CoroutineHandleLike<std::invoke_result_t<F &>> ||
+                                std::same_as<std::remove_cvref_t<std::invoke_result_t<F &>>, DetachedTask>);
 
 namespace detail {
 
-template <typename F>
+template<typename F>
 struct SpawnTask {
     fiber::event::EventLoop::DeferEntry entry{};
     F factory;
 
-    explicit SpawnTask(F &&fn) : factory(std::forward<F>(fn)) {
-    }
+    explicit SpawnTask(F &&fn) : factory(std::forward<F>(fn)) {}
 
     static void run(SpawnTask *task) {
         if (!task) {
@@ -49,26 +64,24 @@ struct SpawnTask {
         delete task;
     }
 
-    static void cancel(SpawnTask *task) {
-        delete task;
-    }
+    static void cancel(SpawnTask *task) { delete task; }
 
 private:
     void invoke() {
-        if constexpr (std::is_void_v<std::invoke_result_t<F &>>) {
-            std::invoke(factory);
-        } else {
+        if constexpr (CoroutineHandleLike<std::invoke_result_t<F &>>) {
             auto handle = std::invoke(factory);
             if (handle && !handle.done()) {
                 handle.resume();
             }
+        } else {
+            std::invoke(factory);
         }
     }
 };
 
 } // namespace detail
 
-template <typename F>
+template<typename F>
     requires SpawnFactory<F>
 void spawn(fiber::event::EventLoop &loop, F &&factory) {
     using Task = detail::SpawnTask<std::decay_t<F>>;
@@ -76,7 +89,7 @@ void spawn(fiber::event::EventLoop &loop, F &&factory) {
     loop.post<Task, &Task::entry, &Task::run, &Task::cancel>(*task);
 }
 
-template <typename F>
+template<typename F>
     requires SpawnFactory<F>
 void spawn(F &&factory) {
     auto *loop = fiber::event::EventLoop::current_or_null();

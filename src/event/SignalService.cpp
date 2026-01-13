@@ -58,7 +58,7 @@ bool SignalService::attach(const fiber::async::SignalSet &mask) {
     if (signalfd_ < 0) {
         return false;
     }
-    if (loop_.poller().add(signalfd_, IoEvent::Read, &item_) != 0) {
+    if (loop_.poller().add(signalfd_, IoEvent::Read, &item_) != fiber::common::IoErr::None) {
         ::close(signalfd_);
         signalfd_ = -1;
         return false;

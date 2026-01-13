@@ -44,8 +44,9 @@ void StreamFd::close() {
     if (fd_ < 0) {
         return;
     }
-    if (watching_ != fiber::event::IoEvent::None) {
+    if (registered_) {
         loop_.poller().del(fd_);
+        registered_ = false;
         watching_ = fiber::event::IoEvent::None;
     }
     if (local_read_waiter_) {
@@ -182,10 +183,8 @@ void StreamFd::handle_events(fiber::event::IoEvent events) {
         return;
     }
     fiber::event::IoEvent desired = watching_ & ~events;
-    if (desired == fiber::event::IoEvent::None) {
-        loop_.poller().del(fd_);
-    } else {
-        loop_.poller().mod(fd_, desired, &item_);
+    if (desired != fiber::event::IoEvent::None) {
+        loop_.poller().mod(fd_, desired, &item_, fiber::event::Poller::Mode::OneShot);
     }
     watching_ = desired;
 
@@ -219,9 +218,6 @@ void StreamFd::handle_events(fiber::event::IoEvent events) {
 
 void StreamFd::on_events(fiber::event::Poller::Item *item, int fd, fiber::event::IoEvent events) {
     (void) fd;
-    if (!item) {
-        return;
-    }
     auto *stream_item = static_cast<StreamItem *>(item);
     if (!stream_item->stream) {
         return;

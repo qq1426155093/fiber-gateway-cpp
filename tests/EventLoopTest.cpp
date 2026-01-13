@@ -19,6 +19,7 @@ TEST(EventLoopTest, FramePoolInstalledOnLoopThread) {
         bool ok = pool != nullptr && pool == &loop.frame_pool();
         promise.set_value(ok);
         loop.stop();
+        return fiber::async::DetachedTask{};
     });
 
     if (future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {

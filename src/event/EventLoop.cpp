@@ -16,18 +16,18 @@ namespace {
 
 constexpr std::uint32_t to_mask(IoEvent events) { return static_cast<std::uint32_t>(events); }
 
-IoEvent to_io_event(std::uint32_t events) {
-    std::uint32_t mask = 0;
+IoEvent to_io_event(std::uint32_t events, IoEvent interested) {
+    IoEvent mask = Poller::Event::None;
     if (events & (EPOLLIN | EPOLLPRI)) {
-        mask |= to_mask(IoEvent::Read);
+        mask |=  IoEvent::Read;
     }
     if (events & EPOLLOUT) {
-        mask |= to_mask(IoEvent::Write);
+        mask |=  IoEvent::Write;
     }
     if (events & (EPOLLERR | EPOLLHUP)) {
-        mask |= to_mask(IoEvent::Read) | to_mask(IoEvent::Write);
+        mask |= interested;
     }
-    return static_cast<IoEvent>(mask);
+    return mask;
 }
 
 } // namespace
@@ -47,7 +47,7 @@ EventLoop::EventLoop(EventLoopGroup *group) : group_(group) {
         event_fd_ = -1;
         return;
     }
-    if (poller_.add(event_fd_, IoEvent::Read, &wakeup_entry_) != 0) {
+    if (poller_.add(event_fd_, IoEvent::Read, &wakeup_entry_) != fiber::common::IoErr::None) {
         ::close(event_fd_);
         event_fd_ = -1;
     }
@@ -196,7 +196,7 @@ void EventLoop::run_once() {
 
     for (int i = 0; i < count; ++i) {
         auto *item = static_cast<Poller::Item *>(events[i].data.ptr);
-        IoEvent io = to_io_event(events[i].events);
+        IoEvent io = to_io_event(events[i].events, item ? item->interested_ : IoEvent::None);
         if (to_mask(io) == 0) {
             continue;
         }

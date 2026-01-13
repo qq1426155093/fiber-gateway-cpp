@@ -14,42 +14,7 @@
 
 namespace {
 
-class DetachedTask {
-public:
-    struct promise_type : fiber::async::CoroutinePromiseBase {
-        DetachedTask get_return_object() {
-            return {};
-        }
-
-        std::suspend_never initial_suspend() noexcept {
-            return {};
-        }
-
-        struct FinalAwaiter {
-            bool await_ready() noexcept {
-                return false;
-            }
-
-            void await_suspend(std::coroutine_handle<promise_type> handle) noexcept {
-                handle.destroy();
-            }
-
-            void await_resume() noexcept {
-            }
-        };
-
-        FinalAwaiter final_suspend() noexcept {
-            return {};
-        }
-
-        void return_void() noexcept {
-        }
-
-        void unhandled_exception() {
-            std::terminate();
-        }
-    };
-};
+using DetachedTask = fiber::async::DetachedTask;
 
 DetachedTask run_sleep(std::promise<std::chrono::steady_clock::duration> *promise,
                        std::chrono::steady_clock::duration delay) {
@@ -140,7 +105,7 @@ TEST(SleepTest, ResumesAfterDelay) {
 
     group.start();
     fiber::async::spawn(group.at(0), [&promise]() {
-        run_sleep(&promise, std::chrono::milliseconds(30));
+        return run_sleep(&promise, std::chrono::milliseconds(30));
     });
 
     if (future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
@@ -168,6 +133,7 @@ TEST(SleepTest, CancelOnDestroy) {
         handle.resume();
         handle.destroy();
         ready.set_value();
+        return DetachedTask{};
     });
 
     if (future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
