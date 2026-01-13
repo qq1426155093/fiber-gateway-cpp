@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "../../async/CoroutinePromiseBase.h"
+#include "../../common/Assert.h"
 
 namespace fiber::script::async {
 
@@ -68,7 +69,7 @@ public:
         }
 
         void unhandled_exception() {
-            result_ = std::unexpected(TaskError{"unhandled exception"});
+            FIBER_PANIC("unhandled exception in Task");
         }
 
         template <typename U>
@@ -160,7 +161,7 @@ public:
         }
 
         void unhandled_exception() {
-            result_ = std::unexpected(TaskError{"unhandled exception"});
+            FIBER_PANIC("unhandled exception in Task");
         }
 
         void return_value(std::expected<void, TaskError> value) {
