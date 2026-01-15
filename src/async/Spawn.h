@@ -46,7 +46,7 @@ namespace detail {
 
 template<typename F>
 struct SpawnTask {
-    fiber::event::EventLoop::DeferEntry entry{};
+    fiber::event::EventLoop::NotifyEntry entry{};
     F factory;
 
     explicit SpawnTask(F &&fn) : factory(std::forward<F>(fn)) {}
@@ -63,8 +63,6 @@ struct SpawnTask {
         }
         delete task;
     }
-
-    static void cancel(SpawnTask *task) { delete task; }
 
 private:
     void invoke() {
@@ -86,7 +84,7 @@ template<typename F>
 void spawn(fiber::event::EventLoop &loop, F &&factory) {
     using Task = detail::SpawnTask<std::decay_t<F>>;
     auto *task = new Task(std::forward<F>(factory));
-    loop.post<Task, &Task::entry, &Task::run, &Task::cancel>(*task);
+    loop.post<Task, &Task::entry, &Task::run>(*task);
 }
 
 template<typename F>

@@ -28,38 +28,36 @@ concept TimerEntryMember = std::is_object_v<Handle> && !std::is_const_v<Handle> 
                            };
 
 template<typename Handle, typename Entry, auto EntryMember>
-concept DeferEntryMember = std::is_object_v<Handle> && !std::is_const_v<Handle> &&
-                           std::same_as<decltype(EntryMember), Entry Handle::*> && requires(Handle &handle) {
-                               { handle.*EntryMember } -> std::same_as<Entry &>;
-                           };
+concept NotifyEntryMember = std::is_object_v<Handle> && !std::is_const_v<Handle> &&
+                            std::same_as<decltype(EntryMember), Entry Handle::*> && requires(Handle &handle) {
+                                { handle.*EntryMember } -> std::same_as<Entry &>;
+                            };
 
 template<typename Handle, auto Cb>
 concept TimerCallback = std::same_as<decltype(Cb), void (*)(Handle *)>;
 
 template<typename Handle, auto Cb>
-concept DeferCallback = std::same_as<decltype(Cb), void (*)(Handle *)>;
+concept NotifyCallback = std::same_as<decltype(Cb), void (*)(Handle *)>;
 
 } // namespace detail
 
 class EventLoop {
 public:
-    struct DeferEntry {
+    struct NotifyEntry {
         friend class EventLoop;
 
     public:
-        using Callback = void (*)(DeferEntry *);
+        using Callback = void (*)(NotifyEntry *);
 
-        DeferEntry();
-        DeferEntry(const DeferEntry &) = delete;
-        DeferEntry &operator=(const DeferEntry &) = delete;
-        DeferEntry(DeferEntry &&) = delete;
-        DeferEntry &operator=(DeferEntry &&) = delete;
+        NotifyEntry();
+        NotifyEntry(const NotifyEntry &) = delete;
+        NotifyEntry &operator=(const NotifyEntry &) = delete;
+        NotifyEntry(NotifyEntry &&) = delete;
+        NotifyEntry &operator=(NotifyEntry &&) = delete;
 
     private:
         Callback on_run = nullptr;
-        Callback on_cancel = nullptr;
-        std::atomic<std::uint8_t> state{0};
-        MpscQueue<DeferEntry *>::Node node;
+        MpscQueue<NotifyEntry *>::Node node;
         std::ptrdiff_t handle_offset = 0;
     };
 
@@ -101,28 +99,17 @@ public:
     [[nodiscard]] bool in_loop() const noexcept { return current_or_null() == this; }
     [[nodiscard]] std::chrono::steady_clock::time_point now() const noexcept { return now_; }
 
-    void post(DeferEntry &entry) noexcept;
-    bool cancel(DeferEntry &entry) noexcept;
 
     void post_at(std::chrono::steady_clock::time_point when, TimerEntry &entry);
     void cancel(TimerEntry &entry);
 
-    template<typename Handle, auto EntryMember, auto RunCb, auto CancelCb>
-        requires detail::DeferEntryMember<Handle, DeferEntry, EntryMember> && detail::DeferCallback<Handle, RunCb> &&
-                 detail::DeferCallback<Handle, CancelCb>
+    template<typename Handle, auto EntryMember, auto RunCb>
+        requires detail::NotifyEntryMember<Handle, NotifyEntry, EntryMember> && detail::NotifyCallback<Handle, RunCb>
     void post(Handle &handle) noexcept {
-        DeferEntry &entry = handle.*EntryMember;
+        NotifyEntry &entry = handle.*EntryMember;
         entry.handle_offset = reinterpret_cast<char *>(&entry) - reinterpret_cast<char *>(&handle);
-        entry.on_run = &EventLoop::defer_trampoline<Handle, EntryMember, RunCb>;
-        entry.on_cancel = &EventLoop::defer_trampoline<Handle, EntryMember, CancelCb>;
-        post(entry);
-    }
-
-    template<typename Handle, auto EntryMember>
-        requires detail::DeferEntryMember<Handle, DeferEntry, EntryMember>
-    bool cancel(Handle &handle) {
-        DeferEntry &entry = handle.*EntryMember;
-        return cancel(entry);
+        entry.on_run = &EventLoop::notify_trampoline<Handle, EntryMember, RunCb>;
+        enqueue_notify(&entry.node);
     }
 
     template<typename Handle, auto EntryMember, auto Cb>
@@ -155,13 +142,11 @@ public:
 
 private:
     static thread_local EventLoop *current_;
-    static constexpr std::uint8_t kDeferQueued = 0x1;
-    static constexpr std::uint8_t kDeferCanceled = 0x2;
 
     struct WakeupEntry : Poller::Item {
         EventLoop *loop = nullptr;
     };
-    using DeferNode = MpscQueue<DeferEntry *>::Node;
+    using NotifyNode = MpscQueue<NotifyEntry *>::Node;
 
     static TimerEntry *timer_from_node(TimerQueue::Node *node) noexcept;
     friend bool operator<(const TimerQueue::Node &a, const TimerQueue::Node &b) noexcept;
@@ -169,7 +154,7 @@ private:
     static void on_wakeup(Poller::Item *item, int fd, IoEvent events);
 
     template<typename Handle, auto EntryMember, auto Cb>
-    static void defer_trampoline(DeferEntry *entry) {
+    static void notify_trampoline(NotifyEntry *entry) {
         if (!entry) {
             return;
         }
@@ -189,29 +174,20 @@ private:
     }
 
     void notify_wakeup();
-    void enqueue_defer(DeferNode *node);
+    void enqueue_notify(NotifyNode *node);
     template<bool all>
-    void drain_defers() {
-        DeferNode *node = defer_queue_.try_pop_all();
+    void drain_notifys() {
+        NotifyNode *node = notify_queue_.try_pop_all();
 
         while (node) {
-            DeferNode *next = MpscQueue<DeferEntry *>::next(node);
-            DeferEntry *entry = MpscQueue<DeferEntry *>::unwrap(node);
-            MpscQueue<DeferEntry *>::reset(node);
-            std::uint8_t state = entry->state.exchange(0, std::memory_order_acq_rel);
-            if (state & kDeferCanceled) {
-                if (entry->on_cancel) {
-                    entry->on_cancel(entry);
-                }
-            } else {
-                if (entry->on_run) {
-                    entry->on_run(entry);
-                }
-            }
+            NotifyNode *next = MpscQueue<NotifyEntry *>::next(node);
+            NotifyEntry *entry = MpscQueue<NotifyEntry *>::unwrap(node);
+            MpscQueue<NotifyEntry *>::reset(node);
+            entry->on_run(entry);
             node = next;
             if constexpr (all) {
                 if (!node) {
-                    node = defer_queue_.try_pop_all();
+                    node = notify_queue_.try_pop_all();
                 }
             }
         }
@@ -220,7 +196,7 @@ private:
     void run_due_timers(std::chrono::steady_clock::time_point now);
     int next_timeout_ms(std::chrono::steady_clock::time_point now) const;
 
-    MpscQueue<DeferEntry *> defer_queue_;
+    MpscQueue<NotifyEntry *> notify_queue_;
     // Loop-thread only: timer heap operations.
     TimerQueue timers_;
     Poller poller_;

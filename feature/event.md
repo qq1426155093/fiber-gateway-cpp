@@ -9,7 +9,7 @@
 
 ## Threading Model
 - One event loop thread owns the poller and internal state.
-- Any thread may call `post(DeferEntry&)`, `cancel(DeferEntry&)`, `post_at`, `cancel`, or `stop`.
+- Any thread may call `post(NotifyEntry&)`, `cancel(NotifyEntry&)`, `post_at`, `cancel`, or `stop`.
 - Cross-thread calls enqueue into the defer MPSC and signal `eventfd` to wake the loop.
 
 ## Loop Group
@@ -24,11 +24,41 @@ loop thread (otherwise it uses round-robin selection).
 - An atomic flag (`wakeup_pending_`) prevents redundant wakeups.
 
 ## Defer Queue
-`DeferEntry` provides an intrusive, fixed-callback scheduling primitive:
-- `post(DeferEntry&)` enqueues the entry for execution on the loop thread.
-- `cancel(DeferEntry&)` marks the entry canceled; the loop executes `on_cancel` when drained.
+`NotifyEntry` provides an intrusive, fixed-callback scheduling primitive:
+- `post(NotifyEntry&)` enqueues the entry for execution on the loop thread.
+- `cancel(NotifyEntry&)` marks the entry canceled; the loop executes `on_cancel` when drained.
 - Each entry has two callbacks: `on_run` and `on_cancel` (either may be null).
 - Cancellation is best-effort if it races with draining.
+
+## Local Queue vs MPSC Queue
+- Local queue is loop-thread only, intrusive, and supports O(1) erase for cancel.
+- Local entries may reference awaiter memory and coroutine handles.
+- MPSC queue is cross-thread, heap-allocated nodes, and does not support erase.
+- MPSC tasks must not capture awaiter pointers directly; they carry `SharedState`
+  or a cancel flag and self-discard on dequeue if canceled.
+- Cross-thread tasks should enqueue a loop-local entry when they need cancelable
+  behavior or awaiter access.
+
+## Awaiter Timeout + Cancellation Safety (Design Rules)
+- Timeouts are driven by the owning `EventLoop` timer; the timeout callback and
+  the awaited completion both execute on the same loop thread.
+- Timeout callbacks may resume coroutines inline (no local-queue hop), as long
+  as the local queue is cancelable and the guarantees below are upheld.
+- Any callback that touches awaiter memory (awaiter pointer, coroutine handle,
+  stack storage) must be loop-local and cancelable. Prefer a loop-only intrusive
+  queue (O(1) erase) for these tasks.
+- Cross-thread scheduling uses the MPSC queue with heap-allocated nodes. MPSC
+  nodes must not capture awaiter pointers directly; they carry a `SharedState`
+  or cancel flag and drop themselves on dequeue if canceled.
+- EventLoop guarantees required to avoid a separate resume-state gate:
+  - Local queue is "pop-and-run": tasks are removed only immediately before
+    execution (no prefetch/temporary staging).
+  - `cancel_local` is synchronous on the loop thread and removes the node if it
+    is still queued; `false` means it has already run.
+  - Normal completion is posted only through the local queue (not inline), so
+    timeout and normal completion cannot both run inline.
+  - Cancellation cuts off the event source (poller/watch/timer) so no new
+    completion task is enqueued after cancel.
 
 ## TimerQueue (Heap)
 `TimerQueue` is a C++ translation of `libuv`'s `heap-inl.h`, used as an intrusive
@@ -64,8 +94,8 @@ public:
     void run_once();
     void stop();
 
-    void post(DeferEntry &entry);
-    void cancel(DeferEntry &entry);
+    void post(NotifyEntry &entry);
+    void cancel(NotifyEntry &entry);
 
     void post_at(std::chrono::steady_clock::time_point when, TimerEntry &entry);
     void cancel(TimerEntry &entry);

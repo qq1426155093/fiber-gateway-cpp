@@ -66,12 +66,11 @@ struct SignalWaiter {
     SignalWaiter *next = nullptr;
     bool queued = false;
     int signum = 0;
-    fiber::event::EventLoop::DeferEntry defer_entry{};
+    fiber::event::EventLoop::NotifyEntry notify_entry{};
     SignalAwaiter *owner = nullptr;
 
     void resume();
     static void on_run(SignalWaiter *waiter);
-    static void on_cancel(SignalWaiter *waiter);
 };
 
 } // namespace detail

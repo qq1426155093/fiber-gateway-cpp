@@ -27,9 +27,9 @@ Two waiter types (read/write), each contains:
 - buffer + length
 - `IoResult<size_t> result`
 - `std::atomic<State> state`
-- `DeferEntry start_entry` (posted to IO loop)
-- `DeferEntry cancel_entry` (posted to IO loop for cancellation)
-- `DeferEntry resume_entry` (posted to resume loop)
+- `NotifyEntry start_entry` (posted to IO loop)
+- `NotifyEntry cancel_entry` (posted to IO loop for cancellation)
+- `NotifyEntry resume_entry` (posted to resume loop)
 
 State machine:
 - `Waiting -> Notified -> Resumed`

@@ -58,10 +58,6 @@ void detail::SignalWaiter::on_run(SignalWaiter *waiter) {
     delete waiter;
 }
 
-void detail::SignalWaiter::on_cancel(SignalWaiter *waiter) {
-    delete waiter;
-}
-
 SignalAwaiter::SignalAwaiter(int signum) noexcept : signum_(signum) {
 }
 

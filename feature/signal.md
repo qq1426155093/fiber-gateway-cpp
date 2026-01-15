@@ -115,7 +115,7 @@ public:
 
 private:
     struct Delivery {
-        EventLoop::DeferEntry entry{};
+        EventLoop::NotifyEntry entry{};
         SignalService *service = nullptr;
         fiber::async::SignalInfo info{};
         static void on_run(Delivery *self);
@@ -137,11 +137,11 @@ private:
 } // namespace fiber::event
 ```
 
-### Waiter Shape (Matches EventLoop::DeferEntry Pattern)
+### Waiter Shape (Matches EventLoop::NotifyEntry Pattern)
 ```cpp
 // src/async/Signal.h (internal detail)
 struct SignalWaiter {
-    fiber::event::EventLoop::DeferEntry defer{};
+    fiber::event::EventLoop::NotifyEntry defer{};
     std::coroutine_handle<> handle{};
     fiber::event::EventLoop *loop = nullptr;
     std::atomic<State> state{State::Waiting};

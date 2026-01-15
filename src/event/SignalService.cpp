@@ -95,13 +95,9 @@ SignalService &SignalService::current() {
     return *current_;
 }
 
-SignalService *SignalService::current_or_null() noexcept {
-    return current_;
-}
+SignalService *SignalService::current_or_null() noexcept { return current_; }
 
-bool SignalService::valid_signum(int signum) noexcept {
-    return signum > 0 && signum < NSIG;
-}
+bool SignalService::valid_signum(int signum) noexcept { return signum > 0 && signum < NSIG; }
 
 void SignalService::enqueue_waiter(int signum, fiber::async::detail::SignalWaiter *waiter) {
     FIBER_ASSERT(loop_.in_loop());
@@ -209,10 +205,8 @@ void SignalService::on_delivery(const fiber::async::SignalInfo &info) {
         return;
     }
     waiter->info = info;
-    loop_.post<fiber::async::detail::SignalWaiter,
-               &fiber::async::detail::SignalWaiter::defer_entry,
-               &fiber::async::detail::SignalWaiter::on_run,
-               &fiber::async::detail::SignalWaiter::on_cancel>(*waiter);
+    loop_.post<fiber::async::detail::SignalWaiter, &fiber::async::detail::SignalWaiter::notify_entry,
+               &fiber::async::detail::SignalWaiter::on_run>(*waiter);
 }
 
 void SignalService::on_signalfd(Poller::Item *item, int fd, IoEvent events) {

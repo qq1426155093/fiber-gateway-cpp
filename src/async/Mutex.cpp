@@ -38,10 +38,6 @@ void Mutex::Waiter::on_run(Waiter *waiter) {
     delete waiter;
 }
 
-void Mutex::Waiter::on_cancel(Waiter *waiter) {
-    delete waiter;
-}
-
 Mutex::LockGuard::LockGuard(LockGuard &&other) noexcept : mutex_(other.mutex_) {
     other.mutex_ = nullptr;
 }
@@ -239,7 +235,7 @@ Mutex::WaiterPtr Mutex::select_next_waiter_locked() {
 
 void Mutex::post_resume(WaiterPtr waiter) {
     FIBER_ASSERT(waiter && waiter->loop);
-    waiter->loop->post<Waiter, &Waiter::defer_entry, &Waiter::on_run, &Waiter::on_cancel>(*waiter);
+    waiter->loop->post<Waiter, &Waiter::notify_entry, &Waiter::on_run>(*waiter);
 }
 
 } // namespace fiber::async

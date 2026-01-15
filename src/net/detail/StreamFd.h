@@ -250,9 +250,9 @@ enum class WaiterState : std::uint8_t {
 struct CrossThreadWaiter : WaiterBase {
     fiber::event::EventLoop *loop_ = nullptr;
     // used to notify io-loop watch event and caller-loop resume
-    fiber::event::EventLoop::DeferEntry notify_entry_{};
+    fiber::event::EventLoop::NotifyEntry notify_entry_{};
     // if the state_ is Notify_Watch. but the caller cancel waiting, notify the io-loop unwatch event.
-    fiber::event::EventLoop::DeferEntry cancel_entry_{};
+    fiber::event::EventLoop::NotifyEntry cancel_entry_{};
     std::atomic<WaiterState> state_{WaiterState::Notify_Watch};
 
     void cancel_wait() noexcept;
@@ -261,7 +261,6 @@ struct CrossThreadWaiter : WaiterBase {
     static void on_notify_watch(CrossThreadWaiter *waiter);
     static void on_notify_cancel(CrossThreadWaiter *waiter);
     static void on_notify_resume(CrossThreadWaiter *waiter);
-    static void on_cancel_wait(CrossThreadWaiter *waiter);
 };
 
 template<typename Op>

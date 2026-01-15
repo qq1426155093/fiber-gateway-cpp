@@ -55,7 +55,7 @@ foreach(EXAMPLE_SRC IN LISTS EXAMPLE_SRC_LIST)
 endforeach()
 
 option(FIBER_BUILD_TESTS "Build tests" ON)
-option(FIBER_FETCH_DEPS "Allow CMake to download third-party dependencies" OFF)
+option(FIBER_FETCH_DEPS "Allow CMake to download third-party dependencies" ON)
 if(FIBER_BUILD_TESTS)
     find_package(GTest QUIET)
     if (NOT GTest_FOUND)

@@ -263,8 +263,8 @@ void CrossThreadWaiter::cancel_wait() noexcept {
     }
 
     if (expected == WaiterState::Request_Cancel) {
-        stream_->loop_.post<CrossThreadWaiter, &CrossThreadWaiter::cancel_entry_, &CrossThreadWaiter::on_notify_cancel,
-                            &CrossThreadWaiter::on_cancel_wait>(*this);
+        stream_->loop_.post<CrossThreadWaiter, &CrossThreadWaiter::cancel_entry_, &CrossThreadWaiter::on_notify_cancel>(
+                *this);
     }
 }
 
@@ -289,8 +289,8 @@ void CrossThreadWaiter::do_notify_resume(CrossThreadWaiter *waiter) noexcept {
         }
     }
     if (expected == WaiterState::Notify_Resume) {
-        waiter->loop_->post<CrossThreadWaiter, &CrossThreadWaiter::cancel_entry_, &CrossThreadWaiter::on_notify_resume,
-                            &CrossThreadWaiter::on_cancel_wait>(*waiter);
+        waiter->loop_->post<CrossThreadWaiter, &CrossThreadWaiter::cancel_entry_, &CrossThreadWaiter::on_notify_resume>(
+                *waiter);
     }
 }
 
@@ -318,11 +318,6 @@ void CrossThreadWaiter::on_notify_watch(CrossThreadWaiter *waiter) {
         do_notify_resume(waiter);
     }
     // wait for io-event notify
-}
-
-void CrossThreadWaiter::on_cancel_wait(CrossThreadWaiter *waiter) {
-    FIBER_ASSERT(waiter);
-    delete waiter;
 }
 
 void CrossThreadWaiter::on_notify_resume(CrossThreadWaiter *waiter) {
@@ -401,8 +396,8 @@ bool StreamFd::ReadWriteAwaiter<Op>::await_suspend(std::coroutine_handle<> handl
     waiter->coro_ = handle;
     waiter->loop_ = current;
     waiter_ = waiter;
-    stream_->loop_.post<CrossThreadWaiter, &CrossThreadWaiter::notify_entry_, &CrossThreadWaiter::on_notify_watch,
-                        &CrossThreadWaiter::on_cancel_wait>(*waiter);
+    stream_->loop_.post<CrossThreadWaiter, &CrossThreadWaiter::notify_entry_, &CrossThreadWaiter::on_notify_watch>(
+            *waiter);
     return true;
 }
 

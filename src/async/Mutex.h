@@ -85,7 +85,6 @@ private:
 
         void resume();
         static void on_run(Waiter *waiter);
-        static void on_cancel(Waiter *waiter);
 
         Mutex *mutex = nullptr;
         std::coroutine_handle<> handle{};
@@ -95,7 +94,7 @@ private:
         Waiter *prev = nullptr;
         Waiter *next = nullptr;
         bool queued = false;
-        fiber::event::EventLoop::DeferEntry defer_entry{};
+        fiber::event::EventLoop::NotifyEntry notify_entry{};
     };
 
     bool enqueue_waiter(WaiterPtr waiter);

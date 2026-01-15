@@ -19,10 +19,10 @@ constexpr std::uint32_t to_mask(IoEvent events) { return static_cast<std::uint32
 IoEvent to_io_event(std::uint32_t events, IoEvent interested) {
     IoEvent mask = Poller::Event::None;
     if (events & (EPOLLIN | EPOLLPRI)) {
-        mask |=  IoEvent::Read;
+        mask |= IoEvent::Read;
     }
     if (events & EPOLLOUT) {
-        mask |=  IoEvent::Write;
+        mask |= IoEvent::Write;
     }
     if (events & (EPOLLERR | EPOLLHUP)) {
         mask |= interested;
@@ -32,7 +32,7 @@ IoEvent to_io_event(std::uint32_t events, IoEvent interested) {
 
 } // namespace
 
-EventLoop::DeferEntry::DeferEntry() : node(this) {}
+EventLoop::NotifyEntry::NotifyEntry() : node(this) {}
 
 EventLoop::EventLoop(EventLoopGroup *group) : group_(group) {
     timers_.init();
@@ -83,8 +83,8 @@ void EventLoop::notify_wakeup() {
     }
 }
 
-void EventLoop::enqueue_defer(DeferNode *node) {
-    defer_queue_.push(node);
+void EventLoop::enqueue_notify(NotifyNode *node) {
+    notify_queue_.push(node);
     if (!in_loop()) {
         notify_wakeup();
     }
@@ -166,7 +166,7 @@ void EventLoop::run() {
     EventLoop *prev = current_;
     current_ = this;
     stop_requested_.store(false, std::memory_order_release);
-    drain_defers<false>();
+    drain_notifys<false>();
     do {
         run_once();
     } while (!stop_requested_.load(std::memory_order_acquire));
@@ -180,7 +180,7 @@ void EventLoop::run_once() {
     now_ = std::chrono::steady_clock::now();
     run_due_timers(now_);
 
-    drain_defers<true>();
+    drain_notifys<true>();
     int timeout_ms = next_timeout_ms(now_);
     constexpr int kMaxEvents = 64;
     epoll_event events[kMaxEvents];
@@ -202,41 +202,12 @@ void EventLoop::run_once() {
         }
         item->callback(item, item->fd(), io);
     }
-    drain_defers<false>();
+    drain_notifys<false>();
 }
 
 void EventLoop::stop() {
     stop_requested_.store(true, std::memory_order_release);
     notify_wakeup();
-}
-
-void EventLoop::post(DeferEntry &entry) noexcept {
-    FIBER_ASSERT(entry.on_run != nullptr || entry.on_cancel != nullptr);
-
-    std::uint8_t state = entry.state.load(std::memory_order_acquire);
-    for (;;) {
-        if (state & kDeferQueued) {
-            return;
-        }
-        std::uint8_t desired = (state & static_cast<std::uint8_t>(~kDeferCanceled)) | kDeferQueued;
-        if (entry.state.compare_exchange_weak(state, desired, std::memory_order_acq_rel, std::memory_order_acquire)) {
-            break;
-        }
-    }
-    enqueue_defer(&entry.node);
-}
-
-bool EventLoop::cancel(DeferEntry &entry) noexcept {
-    std::uint8_t state = entry.state.load(std::memory_order_acquire);
-    for (;;) {
-        if ((state & kDeferQueued) == 0) {
-            return false;
-        }
-        std::uint8_t desired = state | kDeferCanceled;
-        if (entry.state.compare_exchange_weak(state, desired, std::memory_order_acq_rel, std::memory_order_acquire)) {
-            return true;
-        }
-    }
 }
 
 void EventLoop::post_at(std::chrono::steady_clock::time_point when, TimerEntry &entry) {
