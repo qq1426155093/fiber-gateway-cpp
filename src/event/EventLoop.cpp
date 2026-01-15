@@ -35,6 +35,7 @@ IoEvent to_io_event(std::uint32_t events, IoEvent interested) {
 EventLoop::NotifyEntry::NotifyEntry() : node(this) {}
 
 EventLoop::EventLoop(EventLoopGroup *group) : group_(group) {
+    detail::queue_init(&local_queue_);
     timers_.init();
     wakeup_entry_.loop = this;
     wakeup_entry_.callback = &EventLoop::on_wakeup;
@@ -60,9 +61,6 @@ EventLoop::~EventLoop() {
 }
 
 EventLoop::TimerEntry *EventLoop::timer_from_node(TimerQueue::Node *node) noexcept {
-    if (!node) {
-        return nullptr;
-    }
     return reinterpret_cast<TimerEntry *>(reinterpret_cast<char *>(node) - offsetof(TimerEntry, node));
 }
 
@@ -166,7 +164,7 @@ void EventLoop::run() {
     EventLoop *prev = current_;
     current_ = this;
     stop_requested_.store(false, std::memory_order_release);
-    drain_notifys<false>();
+    drain_notify<false>();
     do {
         run_once();
     } while (!stop_requested_.load(std::memory_order_acquire));
@@ -180,7 +178,8 @@ void EventLoop::run_once() {
     now_ = std::chrono::steady_clock::now();
     run_due_timers(now_);
 
-    drain_notifys<true>();
+    drain_notify<true>();
+    drain_defer<true>();
     int timeout_ms = next_timeout_ms(now_);
     constexpr int kMaxEvents = 64;
     epoll_event events[kMaxEvents];
@@ -202,7 +201,7 @@ void EventLoop::run_once() {
         }
         item->callback(item, item->fd(), io);
     }
-    drain_notifys<false>();
+    drain_defer<false>();
 }
 
 void EventLoop::stop() {
@@ -227,6 +226,15 @@ void EventLoop::cancel(TimerEntry &entry) {
     }
     timers_.remove(&entry.node);
     entry.in_heap_ = false;
+}
+
+void EventLoop::cancel(DeferEntry &entry) {
+    FIBER_ASSERT(in_loop());
+    if (!entry.in_queue_) {
+        return;
+    }
+    detail::queue_remove(&entry.node_);
+    entry.in_queue_ = false;
 }
 
 } // namespace fiber::event

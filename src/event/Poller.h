@@ -19,9 +19,7 @@ public:
     struct Item : common::NonCopyable, common::NonMovable {
         using Callback = void (*)(Item *, int fd, Event);
         Callback callback{};
-        int fd() const noexcept {
-            return fd_;
-        }
+        int fd() const noexcept { return fd_; }
         friend class Poller;
 
     private:

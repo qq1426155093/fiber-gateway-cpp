@@ -33,13 +33,82 @@ concept NotifyEntryMember = std::is_object_v<Handle> && !std::is_const_v<Handle>
                                 { handle.*EntryMember } -> std::same_as<Entry &>;
                             };
 
+template<typename Handle, typename Entry, auto EntryMember>
+concept DeferEntryMember = std::is_object_v<Handle> && !std::is_const_v<Handle> &&
+                           std::same_as<decltype(EntryMember), Entry Handle::*> && requires(Handle &handle) {
+                               { handle.*EntryMember } -> std::same_as<Entry &>;
+                           };
+
 template<typename Handle, auto Cb>
 concept TimerCallback = std::same_as<decltype(Cb), void (*)(Handle *)>;
 
 template<typename Handle, auto Cb>
 concept NotifyCallback = std::same_as<decltype(Cb), void (*)(Handle *)>;
 
+template<typename Handle, auto Cb>
+concept DeferCallback = std::same_as<decltype(Cb), void (*)(Handle *)>;
+
+struct Queue {
+    struct Queue *next;
+    struct Queue *prev;
+};
+
+static inline void queue_init(Queue *q) {
+    q->next = q;
+    q->prev = q;
+}
+
+static inline int queue_empty(const Queue *q) { return q == q->next; }
+
+static inline Queue *queue_head(const Queue *q) { return q->next; }
+
+static inline Queue *queue_next(const Queue *q) { return q->next; }
+
+static inline void queue_add(Queue *h, Queue *n) {
+    h->prev->next = n->next;
+    n->next->prev = h->prev;
+    h->prev = n->prev;
+    h->prev->next = h;
+}
+
+static inline void queue_split(Queue *h, Queue *q, Queue *n) {
+    n->prev = h->prev;
+    n->prev->next = n;
+    n->next = q;
+    h->prev = q->prev;
+    h->prev->next = h;
+    q->prev = n;
+}
+
+static inline void queue_move(Queue *h, Queue *n) {
+    if (queue_empty(h))
+        queue_init(n);
+    else
+        queue_split(h, h->next, n);
+}
+static inline void queue_insert_head(Queue *h, Queue *q) {
+    q->next = h->next;
+    q->prev = h;
+    q->next->prev = q;
+    h->next = q;
+}
+
+static inline void queue_insert_tail(Queue *h, Queue *q) {
+    q->next = h;
+    q->prev = h->prev;
+    q->prev->next = q;
+    h->prev = q;
+}
+
+static inline void queue_remove(Queue *q) {
+    q->prev->next = q->next;
+    q->next->prev = q->prev;
+}
+
+
 } // namespace detail
+
+#define queue_data(pointer, type, field) ((type *) ((char *) (pointer) - offsetof(type, field)))
 
 class EventLoop {
 public:
@@ -83,6 +152,19 @@ public:
         std::ptrdiff_t handle_offset = 0;
     };
 
+    struct DeferEntry {
+    public:
+        friend class EventLoop;
+
+        using Callback = void (*)(DeferEntry *);
+
+    private:
+        detail::Queue node_;
+        Callback callback_ = nullptr;
+        bool in_queue_ = false;
+        std::ptrdiff_t handle_offset_ = 0;
+    };
+
     explicit EventLoop(EventLoopGroup *group = nullptr);
     ~EventLoop();
 
@@ -100,9 +182,6 @@ public:
     [[nodiscard]] std::chrono::steady_clock::time_point now() const noexcept { return now_; }
 
 
-    void post_at(std::chrono::steady_clock::time_point when, TimerEntry &entry);
-    void cancel(TimerEntry &entry);
-
     template<typename Handle, auto EntryMember, auto RunCb>
         requires detail::NotifyEntryMember<Handle, NotifyEntry, EntryMember> && detail::NotifyCallback<Handle, RunCb>
     void post(Handle &handle) noexcept {
@@ -110,6 +189,26 @@ public:
         entry.handle_offset = reinterpret_cast<char *>(&entry) - reinterpret_cast<char *>(&handle);
         entry.on_run = &EventLoop::notify_trampoline<Handle, EntryMember, RunCb>;
         enqueue_notify(&entry.node);
+    }
+
+    template<typename Handle, auto EntryMember, auto RunCb>
+        requires detail::DeferEntryMember<Handle, DeferEntry, EntryMember> && detail::DeferCallback<Handle, RunCb>
+    void post_local(Handle &handle) noexcept {
+        DeferEntry &entry = handle.*EntryMember;
+        entry.handle_offset_ = reinterpret_cast<char *>(&entry) - reinterpret_cast<char *>(&handle);
+        entry.callback_ = &EventLoop::defer_trampoline<Handle, EntryMember, RunCb>;
+        if (entry.in_queue_) {
+            return;
+        }
+        entry.in_queue_ = true;
+        detail::queue_insert_tail(&local_queue_, &entry.node_);
+    }
+
+    template<typename Handle, auto EntryMember>
+        requires detail::DeferEntryMember<Handle, DeferEntry, EntryMember>
+    void cancel(Handle &handle) {
+        DeferEntry &entry = handle.*EntryMember;
+        cancel(entry);
     }
 
     template<typename Handle, auto EntryMember, auto Cb>
@@ -155,9 +254,6 @@ private:
 
     template<typename Handle, auto EntryMember, auto Cb>
     static void notify_trampoline(NotifyEntry *entry) {
-        if (!entry) {
-            return;
-        }
         auto *bytes = reinterpret_cast<char *>(entry);
         auto *handle = reinterpret_cast<Handle *>(bytes - entry->handle_offset);
         Cb(handle);
@@ -165,18 +261,22 @@ private:
 
     template<typename Handle, auto EntryMember, auto Cb>
     static void timer_trampoline(TimerEntry *entry) {
-        if (!entry) {
-            return;
-        }
         auto *bytes = reinterpret_cast<char *>(entry);
         auto *handle = reinterpret_cast<Handle *>(bytes - entry->handle_offset);
+        Cb(handle);
+    }
+
+    template<typename Handle, auto EntryMember, auto Cb>
+    static void defer_trampoline(DeferEntry *entry) {
+        auto *bytes = reinterpret_cast<char *>(entry);
+        auto *handle = reinterpret_cast<Handle *>(bytes - entry->handle_offset_);
         Cb(handle);
     }
 
     void notify_wakeup();
     void enqueue_notify(NotifyNode *node);
     template<bool all>
-    void drain_notifys() {
+    void drain_notify() {
         NotifyNode *node = notify_queue_.try_pop_all();
 
         while (node) {
@@ -192,12 +292,39 @@ private:
             }
         }
     }
+
+    template<bool all>
+    void drain_defer() {
+        for (;;) {
+            if (detail::queue_empty(&local_queue_)) {
+                return;
+            }
+            detail::Queue pending;
+            detail::queue_move(&local_queue_, &pending);
+
+            while (!detail::queue_empty(&pending)) {
+                detail::Queue *node = detail::queue_head(&pending);
+                detail::queue_remove(node);
+                auto *entry = queue_data(node, DeferEntry, node_);
+                entry->in_queue_ = false;
+                entry->callback_(entry);
+            }
+            if constexpr (!all) {
+                return;
+            }
+        }
+    }
+
     void drain_wakeup();
     void run_due_timers(std::chrono::steady_clock::time_point now);
     int next_timeout_ms(std::chrono::steady_clock::time_point now) const;
+    void post_at(std::chrono::steady_clock::time_point when, TimerEntry &entry);
+    void cancel(TimerEntry &entry);
+    void cancel(DeferEntry &entry);
 
     MpscQueue<NotifyEntry *> notify_queue_;
     // Loop-thread only: timer heap operations.
+    detail::Queue local_queue_;
     TimerQueue timers_;
     Poller poller_;
     int event_fd_ = -1;
