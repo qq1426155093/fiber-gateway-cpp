@@ -143,6 +143,7 @@ public:
         TimerEntry &operator=(TimerEntry &&) = delete;
 
         bool operator<(const TimerEntry &other) const noexcept { return deadline < other.deadline; }
+        [[nodiscard]] bool is_in_heap() const noexcept { return in_heap_; }
 
     private:
         Callback callback = nullptr;
@@ -157,6 +158,7 @@ public:
         friend class EventLoop;
 
         using Callback = void (*)(DeferEntry *);
+        [[nodiscard]] bool is_in_queue() const noexcept { return in_queue_; }
 
     private:
         detail::Queue node_;

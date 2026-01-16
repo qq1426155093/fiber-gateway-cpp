@@ -99,6 +99,7 @@ if(FIBER_BUILD_TESTS)
             tests/ThreadGroupTest.cpp
             tests/EventLoopTest.cpp
             tests/SleepTest.cpp
+            tests/TimeoutTest.cpp
             tests/MutexTest.cpp
             tests/SignalTest.cpp
             tests/TcpListenerTest.cpp

@@ -109,21 +109,27 @@ public:
     bool attach(const fiber::async::SignalSet &mask);
     void detach();
 
+    static SignalService &current();
+    static SignalService *current_or_null() noexcept;
+
     // Loop-thread only.
-    void enqueue_waiter(int signum, void *waiter);
+    void enqueue_waiter(int signum, fiber::async::detail::SignalWaiter *waiter);
+    void cancel_waiter(fiber::async::detail::SignalWaiter *waiter);
     bool try_pop_pending(int signum, fiber::async::SignalInfo &out);
 
 private:
-    struct Delivery {
-        EventLoop::NotifyEntry entry{};
+    struct SignalItem : Poller::Item {
         SignalService *service = nullptr;
-        fiber::async::SignalInfo info{};
-        static void on_run(Delivery *self);
-        static void on_cancel(Delivery *self);
+    };
+
+    struct WaiterQueue {
+        fiber::async::detail::SignalWaiter *head = nullptr;
+        fiber::async::detail::SignalWaiter *tail = nullptr;
     };
 
     void on_delivery(const fiber::async::SignalInfo &info);
     void drain_signalfd();
+    static void on_signalfd(Poller::Item *item, int fd, IoEvent events);
 
     EventLoop &loop_;
     fiber::async::SignalSet mask_{};
@@ -141,23 +147,24 @@ private:
 ```cpp
 // src/async/Signal.h (internal detail)
 struct SignalWaiter {
-    fiber::event::EventLoop::NotifyEntry defer{};
+    fiber::event::EventLoop::NotifyEntry notify_entry{};
     std::coroutine_handle<> handle{};
     fiber::event::EventLoop *loop = nullptr;
     std::atomic<State> state{State::Waiting};
     SignalInfo info{};
     SignalWaiter *prev = nullptr;
     SignalWaiter *next = nullptr;
+    bool queued = false;
+    int signum = 0;
 
     static void on_run(SignalWaiter *self);
-    static void on_cancel(SignalWaiter *self);
 };
 ```
 
 The loop thread resumes a waiter by:
 ```
-loop->post<SignalWaiter, &SignalWaiter::defer,
-           &SignalWaiter::on_run, &SignalWaiter::on_cancel>(*waiter);
+loop->post<SignalWaiter, &SignalWaiter::notify_entry,
+           &SignalWaiter::on_run>(*waiter);
 ```
 
 ## Suggested File Layout
