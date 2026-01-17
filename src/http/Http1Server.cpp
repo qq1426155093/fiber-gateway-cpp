@@ -244,20 +244,14 @@ HttpTask<common::IoResult<void>> Http1Connection::send_response_header(HttpExcha
     response.append(status_reason);
     response.append("\r\n");
 
-    auto has_header = [&](std::string_view lower) {
-        for (const auto &header : exchange.response_headers_) {
-            std::string name = to_lower_ascii(header.name);
-            if (name == lower) {
-                return true;
-            }
-        }
-        return false;
+    auto has_header = [&](std::string_view name) {
+        return exchange.response_headers_.contains(name);
     };
 
     for (const auto &header : exchange.response_headers_) {
-        response.append(header.name);
+        response.append(header.name_view());
         response.append(": ");
-        response.append(header.value);
+        response.append(header.value_view());
         response.append("\r\n");
     }
 
@@ -444,19 +438,6 @@ std::string Http1Connection::default_reason(int status) {
     default:
         return "OK";
     }
-}
-
-std::string Http1Connection::to_lower_ascii(std::string_view input) {
-    std::string out;
-    out.reserve(input.size());
-    for (char ch : input) {
-        if (ch >= 'A' && ch <= 'Z') {
-            out.push_back(static_cast<char>(ch - 'A' + 'a'));
-        } else {
-            out.push_back(ch);
-        }
-    }
-    return out;
 }
 
 HttpTask<common::IoResult<size_t>> Http1Connection::read_from_stream(std::chrono::seconds timeout) {

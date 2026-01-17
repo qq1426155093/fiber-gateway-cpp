@@ -34,6 +34,9 @@ public:
     std::string_view target() const;
     std::string_view version() const;
     std::string_view header(std::string_view name) const;
+    const HttpHeaders &request_headers() const;
+    HttpHeaders &response_headers();
+    BufPool &pool() noexcept;
     bool request_chunked() const;
     size_t request_content_length() const;
 
@@ -64,6 +67,69 @@ public:
 
 } // namespace fiber::http
 ```
+
+## HttpHeaders & BufPool
+- `BufPool` is a per-exchange arena (ngx_pool_t style). All request/response allocations use it
+  and are released together on `HttpExchange::reset()` or destruction.
+- `BufPool` provides aligned allocations and a `reset()` that frees all blocks (or keeps the first
+  block for reuse). No individual frees.
+- `HttpHeaders` stores header bytes in `BufPool` and indexes fields via a custom hash table.
+  `HeaderField` only contains pointers/lengths into the pool.
+
+### BufPool sketch
+```cpp
+class BufPool : public common::NonCopyable, public common::NonMovable {
+public:
+    explicit BufPool(size_t block_size = 4096);
+
+    void *alloc(size_t size, size_t align = alignof(std::max_align_t));
+    template <typename T> T *alloc(size_t n = 1);
+    void reset();
+};
+```
+
+### HttpHeaders sketch
+```cpp
+class HttpHeaders {
+public:
+    struct HeaderField {
+        const char *name = nullptr;
+        uint32_t name_len = 0;
+        const char *value = nullptr;
+        uint32_t value_len = 0;
+        uint64_t name_hash = 0;
+        uint32_t next = 0;
+        std::string_view name_view() const noexcept;
+        std::string_view value_view() const noexcept;
+    };
+
+    explicit HttpHeaders(BufPool &pool);
+
+    bool add(std::string_view name, std::string_view value);
+    bool set(std::string_view name, std::string_view value);
+    std::string_view get(std::string_view name) const noexcept;
+    size_t remove(std::string_view name) noexcept;
+
+    void reserve_bytes(size_t bytes);
+    void clear() noexcept;
+    void release() noexcept;
+    size_t size() const noexcept;
+
+    std::vector<HeaderField>::const_iterator begin() const noexcept;
+    std::vector<HeaderField>::const_iterator end() const noexcept;
+};
+```
+
+### Hash table layout
+- `fields_`: insertion order array of `HeaderField` with `next` for bucket chaining.
+- `bucket_head_` + `bucket_tail_`: vectors sized to power-of-two; `kInvalid = 0xFFFFFFFF`.
+- Hash: ASCII case-insensitive FNV-1a. Match uses hash + length + ASCII case-insensitive compare.
+- `add` appends to `fields_` and chains via `bucket_tail_`.
+- `remove` compacts `fields_` and rebuilds buckets in one pass (O(n) for small header counts).
+
+### Reset order
+- Because vectors allocate from `BufPool`, `HttpHeaders::release()` must be called before
+  `BufPool::reset()` to avoid dangling pointers inside the vectors.
 
 ## Parsing with llparse
 - Use llhttp (llparse-generated C) under `third_party/llparse/http1/generated/`.

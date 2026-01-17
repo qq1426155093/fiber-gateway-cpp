@@ -12,6 +12,8 @@
 #include "../common/IoError.h"
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
+#include "../common/mem/BufPool.h"
+#include "HttpHeaders.h"
 #include "HttpTask.h"
 
 namespace fiber::http {
@@ -33,11 +35,6 @@ struct ReadBodyResult {
     bool end = false;
 };
 
-struct HttpHeader {
-    std::string name;
-    std::string value;
-};
-
 class Http1Connection;
 class Http1Parser;
 
@@ -47,6 +44,9 @@ public:
     std::string_view target() const noexcept;
     std::string_view version() const noexcept;
     std::string_view header(std::string_view name) const noexcept;
+    const HttpHeaders &request_headers() const noexcept;
+    HttpHeaders &response_headers() noexcept;
+    mem::BufPool &pool() noexcept;
     bool request_chunked() const noexcept;
     size_t request_content_length() const noexcept;
 
@@ -77,7 +77,8 @@ private:
     std::string method_;
     std::string target_;
     std::string version_;
-    std::vector<HttpHeader> request_headers_;
+    mem::BufPool pool_;
+    HttpHeaders request_headers_;
 
     bool request_chunked_ = false;
     bool request_expect_continue_ = false;
@@ -85,7 +86,7 @@ private:
     size_t request_content_length_ = 0;
     bool request_content_length_set_ = false;
 
-    std::vector<HttpHeader> response_headers_;
+    HttpHeaders response_headers_;
     bool response_chunked_ = false;
     bool response_header_sent_ = false;
     bool response_complete_ = false;

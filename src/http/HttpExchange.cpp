@@ -7,21 +7,27 @@
 namespace fiber::http {
 
 HttpExchange::HttpExchange(Http1Connection &connection, const HttpServerOptions &options)
-    : connection_(&connection), options_(&options) {
+    : connection_(&connection),
+      options_(&options),
+      pool_(std::max<size_t>(4096, options.max_header_bytes)),
+      request_headers_(pool_),
+      response_headers_(pool_) {
+    request_headers_.reserve_bytes(options.max_header_bytes);
+    response_headers_.reserve_bytes(options.max_header_bytes);
 }
 
 void HttpExchange::reset() {
     method_.clear();
     target_.clear();
     version_.clear();
-    request_headers_.clear();
+    request_headers_.release();
     request_chunked_ = false;
     request_expect_continue_ = false;
     request_keep_alive_ = true;
     request_content_length_ = 0;
     request_content_length_set_ = false;
 
-    response_headers_.clear();
+    response_headers_.release();
     response_chunked_ = false;
     response_header_sent_ = false;
     response_complete_ = false;
@@ -29,6 +35,12 @@ void HttpExchange::reset() {
     response_content_length_set_ = false;
     response_content_length_ = 0;
     response_body_sent_ = 0;
+
+    pool_.reset();
+    if (options_) {
+        request_headers_.reserve_bytes(options_->max_header_bytes);
+        response_headers_.reserve_bytes(options_->max_header_bytes);
+    }
 
     body_buffer_.clear();
     body_complete_ = false;
@@ -48,21 +60,19 @@ std::string_view HttpExchange::version() const noexcept {
 }
 
 std::string_view HttpExchange::header(std::string_view name) const noexcept {
-    std::string lower;
-    lower.reserve(name.size());
-    for (char ch : name) {
-        if (ch >= 'A' && ch <= 'Z') {
-            lower.push_back(static_cast<char>(ch - 'A' + 'a'));
-        } else {
-            lower.push_back(ch);
-        }
-    }
-    for (const auto &header : request_headers_) {
-        if (header.name == lower) {
-            return header.value;
-        }
-    }
-    return {};
+    return request_headers_.get(name);
+}
+
+const HttpHeaders &HttpExchange::request_headers() const noexcept {
+    return request_headers_;
+}
+
+HttpHeaders &HttpExchange::response_headers() noexcept {
+    return response_headers_;
+}
+
+mem::BufPool &HttpExchange::pool() noexcept {
+    return pool_;
 }
 
 bool HttpExchange::request_chunked() const noexcept {
@@ -82,7 +92,7 @@ HttpTask<common::IoResult<void>> HttpExchange::discard_body() noexcept {
 }
 
 void HttpExchange::set_response_header(std::string_view name, std::string_view value) {
-    response_headers_.push_back(HttpHeader{std::string(name), std::string(value)});
+    response_headers_.set(name, value);
 }
 
 void HttpExchange::set_response_content_length(size_t len) {

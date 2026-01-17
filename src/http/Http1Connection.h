@@ -46,7 +46,6 @@ private:
     HttpTask<common::IoResult<void>> drain_body(HttpExchange &exchange);
     common::IoResult<void> finalize_response_body(HttpExchange &exchange, bool end);
     static std::string default_reason(int status);
-    static std::string to_lower_ascii(std::string_view input);
 
     HttpTask<common::IoResult<size_t>> read_from_stream(std::chrono::seconds timeout);
     void consume_buffer(size_t len);

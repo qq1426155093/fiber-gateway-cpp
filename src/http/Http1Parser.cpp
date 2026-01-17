@@ -8,19 +8,6 @@ namespace fiber::http {
 
 namespace {
 
-std::string to_lower_ascii(std::string_view input) {
-    std::string out;
-    out.reserve(input.size());
-    for (char ch : input) {
-        if (ch >= 'A' && ch <= 'Z') {
-            out.push_back(static_cast<char>(ch - 'A' + 'a'));
-        } else {
-            out.push_back(ch);
-        }
-    }
-    return out;
-}
-
 bool has_token(std::string_view value, std::string_view token) {
     size_t pos = 0;
     while (pos < value.size()) {
@@ -58,6 +45,26 @@ bool has_token(std::string_view value, std::string_view token) {
         }
     }
     return false;
+}
+
+bool equals_ascii_ci(std::string_view left, std::string_view right) {
+    if (left.size() != right.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < left.size(); ++i) {
+        char a = left[i];
+        char b = right[i];
+        if (a >= 'A' && a <= 'Z') {
+            a = static_cast<char>(a - 'A' + 'a');
+        }
+        if (b >= 'A' && b <= 'Z') {
+            b = static_cast<char>(b - 'A' + 'a');
+        }
+        if (a != b) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool parse_transfer_encoding(std::string_view value, bool &chunked) {
@@ -304,13 +311,13 @@ int Http1Parser::handle_header_value_complete() {
     if (!exchange_) {
         return 0;
     }
-    std::string name = to_lower_ascii(current_header_name_);
-    std::string value = current_header_value_;
-    exchange_->request_headers_.push_back(HttpHeader{std::move(name), std::move(value)});
+    if (!exchange_->request_headers_.add(current_header_name_, current_header_value_)) {
+        return fail(HttpParseError::HeadersTooLarge, "headers too large");
+    }
 
-    const HttpHeader &last = exchange_->request_headers_.back();
-    if (last.name == "content-length") {
-        std::string_view val = last.value;
+    std::string_view value = current_header_value_;
+    if (equals_ascii_ci(current_header_name_, "content-length")) {
+        std::string_view val = value;
         size_t length = 0;
         auto result = std::from_chars(val.data(), val.data() + val.size(), length);
         if (result.ec != std::errc() || result.ptr != val.data() + val.size()) {
@@ -322,14 +329,14 @@ int Http1Parser::handle_header_value_complete() {
         }
         exchange_->request_content_length_ = length;
         exchange_->request_content_length_set_ = true;
-    } else if (last.name == "transfer-encoding") {
+    } else if (equals_ascii_ci(current_header_name_, "transfer-encoding")) {
         bool chunked = false;
-        if (!parse_transfer_encoding(last.value, chunked)) {
+        if (!parse_transfer_encoding(value, chunked)) {
             return fail(HttpParseError::UnsupportedTransferEncoding, "unsupported transfer-encoding");
         }
         exchange_->request_chunked_ = chunked;
-    } else if (last.name == "expect") {
-        if (has_token(last.value, "100-continue")) {
+    } else if (equals_ascii_ci(current_header_name_, "expect")) {
+        if (has_token(value, "100-continue")) {
             exchange_->request_expect_continue_ = true;
         }
     }

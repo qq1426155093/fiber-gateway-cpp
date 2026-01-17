@@ -57,7 +57,7 @@ DetachedTask start_server(fiber::event::EventLoop *loop,
                           std::promise<fiber::http::Http1Server *> *server_promise) {
     auto *server = new fiber::http::Http1Server(*loop, std::move(handler));
     fiber::net::ListenOptions options{};
-    fiber::net::SocketAddress addr(fiber::net::IpAddress::loopback_v4(), 0);
+    fiber::net::SocketAddress addr(fiber::net::IpAddress::loopback_v4(), 8080);
     auto bind_result = server->bind(addr, options);
     if (!bind_result) {
         port_promise->set_value(0);
