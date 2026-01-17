@@ -2,26 +2,23 @@
 #define FIBER_HTTP_HTTP1_CONNECTION_H
 
 #include <chrono>
+#include <memory>
 #include <string>
 #include <string_view>
 
-#include "../async/Timeout.h"
 #include "../common/IoError.h"
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
 #include "../event/EventLoop.h"
-#include "../net/SocketAddress.h"
-#include "../net/TcpStream.h"
 #include "HttpExchange.h"
 #include "Http1Parser.h"
+#include "HttpTransport.h"
 
 namespace fiber::http {
 
 class Http1Connection : public common::NonCopyable, public common::NonMovable {
 public:
-    Http1Connection(fiber::event::EventLoop &loop,
-                    int fd,
-                    net::SocketAddress peer,
+    Http1Connection(std::unique_ptr<HttpTransport> transport,
                     const HttpServerOptions &options,
                     HttpHandler handler);
 
@@ -50,7 +47,7 @@ private:
     HttpTask<common::IoResult<size_t>> read_from_stream(std::chrono::seconds timeout);
     void consume_buffer(size_t len);
 
-    fiber::net::TcpStream stream_;
+    std::unique_ptr<HttpTransport> transport_;
     HttpServerOptions options_{};
     HttpHandler handler_{};
     HttpExchange exchange_;

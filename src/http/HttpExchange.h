@@ -15,6 +15,7 @@
 #include "../common/mem/BufPool.h"
 #include "HttpHeaders.h"
 #include "HttpTask.h"
+#include "TlsOptions.h"
 
 namespace fiber::http {
 
@@ -28,6 +29,7 @@ struct HttpServerOptions {
     size_t max_chunk_bytes = 4 * 1024 * 1024;
     bool auto_100_continue = true;
     bool drain_unread_body = false;
+    TlsOptions tls{};
 };
 
 struct ReadBodyResult {

@@ -8,7 +8,10 @@
 
 #include "../async/Spawn.h"
 #include "../common/Assert.h"
+#include "../net/TcpStream.h"
 #include "Http1Connection.h"
+#include "HttpTransport.h"
+#include "TlsContext.h"
 
 namespace fiber::http {
 
@@ -39,18 +42,25 @@ fiber::async::DetachedTask run_connection(std::unique_ptr<Http1Connection> conne
 
 } // namespace
 
-Http1Connection::Http1Connection(fiber::event::EventLoop &loop,
-                                 int fd,
-                                 net::SocketAddress peer,
+Http1Connection::Http1Connection(std::unique_ptr<HttpTransport> transport,
                                  const HttpServerOptions &options,
                                  HttpHandler handler)
-    : stream_(loop, fd, std::move(peer)),
+    : transport_(std::move(transport)),
       options_(options),
       handler_(std::move(handler)),
       exchange_(*this, options_) {
 }
 
 HttpTask<void> Http1Connection::run() {
+    if (transport_) {
+        auto handshake_result = co_await transport_->handshake(options_.tls.handshake_timeout);
+        if (!handshake_result) {
+            transport_->close();
+            closed_ = true;
+            co_return;
+        }
+    }
+
     bool first_request = true;
     while (!closed_) {
         exchange_.reset();
@@ -68,12 +78,12 @@ HttpTask<void> Http1Connection::run() {
                 auto read_result = co_await read_from_stream(header_timeout);
                 if (!read_result) {
                     closed_ = true;
-                    stream_.close();
+                    transport_->close();
                     co_return;
                 }
                 if (*read_result == 0) {
                     closed_ = true;
-                    stream_.close();
+                    transport_->close();
                     co_return;
                 }
             }
@@ -90,7 +100,8 @@ HttpTask<void> Http1Connection::run() {
                 exchange_.set_response_close();
                 exchange_.set_response_content_length(0);
                 co_await send_response_header(exchange_, status, "");
-                stream_.close();
+                co_await transport_->shutdown(options_.write_timeout);
+                transport_->close();
                 closed_ = true;
                 co_return;
             }
@@ -131,7 +142,8 @@ HttpTask<void> Http1Connection::run() {
         }
 
         if (exchange_.response_close_ || !exchange_.request_keep_alive_) {
-            stream_.close();
+            co_await transport_->shutdown(options_.write_timeout);
+            transport_->close();
             closed_ = true;
             co_return;
         }
@@ -364,8 +376,7 @@ HttpTask<common::IoResult<void>> Http1Connection::write_all(const void *data, si
     const char *ptr = static_cast<const char *>(data);
     size_t remaining = len;
     while (remaining > 0) {
-        auto result = co_await fiber::async::timeout_for(
-            [&]() { return stream_.write(ptr, remaining); }, options_.write_timeout);
+        auto result = co_await transport_->write(ptr, remaining, options_.write_timeout);
         if (!result) {
             co_return std::unexpected(result.error());
         }
@@ -442,8 +453,7 @@ std::string Http1Connection::default_reason(int status) {
 
 HttpTask<common::IoResult<size_t>> Http1Connection::read_from_stream(std::chrono::seconds timeout) {
     std::array<char, 8192> buffer{};
-    auto read_result = co_await fiber::async::timeout_for(
-        [&]() { return stream_.read(buffer.data(), buffer.size()); }, timeout);
+    auto read_result = co_await transport_->read(buffer.data(), buffer.size(), timeout);
     if (!read_result) {
         co_return std::unexpected(read_result.error());
     }
@@ -480,6 +490,15 @@ Http1Server::~Http1Server() {
 
 common::IoResult<void> Http1Server::bind(const net::SocketAddress &addr,
                                          const net::ListenOptions &options) {
+    if (options_.tls.enabled) {
+        if (!tls_context_) {
+            tls_context_ = std::make_unique<TlsContext>(options_.tls);
+        }
+        auto tls_result = tls_context_->init();
+        if (!tls_result) {
+            return std::unexpected(tls_result.error());
+        }
+    }
     return listener_.bind(addr, options);
 }
 
@@ -508,9 +527,25 @@ fiber::async::DetachedTask Http1Server::serve() {
         if (accept_result->fd < 0) {
             continue;
         }
-        auto connection = std::make_unique<Http1Connection>(loop_,
-                                                            accept_result->fd,
-                                                            accept_result->peer,
+        auto stream = std::make_unique<net::TcpStream>(loop_,
+                                                       accept_result->fd,
+                                                       accept_result->peer);
+        std::unique_ptr<HttpTransport> transport;
+        if (options_.tls.enabled) {
+            if (!tls_context_) {
+                stream->close();
+                continue;
+            }
+            auto tls_transport = TlsTransport::create(std::move(stream), *tls_context_);
+            if (!tls_transport) {
+                continue;
+            }
+            transport = std::move(*tls_transport);
+        } else {
+            transport = std::make_unique<TcpTransport>(std::move(stream));
+        }
+
+        auto connection = std::make_unique<Http1Connection>(std::move(transport),
                                                             options_,
                                                             handler_);
         fiber::async::spawn(loop_, [connection = std::move(connection)]() mutable {

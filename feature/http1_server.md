@@ -21,6 +21,7 @@ struct HttpServerOptions {
     size_t max_chunk_bytes = 4 * 1024 * 1024;
     bool auto_100_continue = true;
     bool drain_unread_body = false;
+    TlsOptions tls{};
 };
 
 struct ReadBodyResult {
@@ -175,3 +176,47 @@ public:
 - If handler leaves body unread:
   - `drain_unread_body=false`: close connection after response.
   - `drain_unread_body=true`: discard remaining body before next request.
+
+## HTTPS Support (BoringSSL)
+### Goals
+- Add HTTPS on top of existing HTTP/1 server with no API changes to `HttpExchange`.
+- Use BoringSSL for TLS and keep the coroutine IO model intact.
+- Support server certificates and optional client verification; no HTTP/2 yet.
+
+### TLS Configuration
+```cpp
+struct TlsOptions {
+    bool enabled = false;
+    std::string cert_file;
+    std::string key_file;
+    std::string ca_file;
+    bool verify_client = false;
+    std::chrono::seconds handshake_timeout{10};
+    int min_version = TLS1_2_VERSION;
+    int max_version = TLS1_3_VERSION;
+    std::vector<std::string> alpn = {"http/1.1"};
+};
+```
+
+### Transport Abstraction
+- Introduce internal `HttpTransport` interface for `read/write/close`.
+- `TcpTransport` wraps existing `TcpStream` and uses `async::timeout_for`.
+- `TlsTransport` wraps a `TcpStream` + BoringSSL `SSL*` with memory BIOs:
+  - Socket read -> `BIO_write(rbio, ...)`
+  - `SSL_read` provides plaintext to HTTP parser
+  - `SSL_write` produces ciphertext in wbio, flush via socket write
+- TLS handshake is driven in `TlsTransport` and respects `handshake_timeout`.
+
+### Handshake & Errors
+- `SSL_accept` loop; on `SSL_ERROR_WANT_READ/WRITE`, perform socket IO and retry.
+- On `SSL_ERROR_ZERO_RETURN`, treat as EOF.
+- Other errors map to `IoErr::Invalid` or `IoErr::ConnReset`.
+- `close()` performs `SSL_shutdown` and flushes pending wbio data.
+
+### ALPN
+- Server advertises and accepts `http/1.1` only.
+- If client omits ALPN, default to HTTP/1.1.
+
+### Integration
+- `Http1Server` chooses `TcpTransport` or `TlsTransport` based on `TlsOptions::enabled`.
+- `Http1Connection` depends on `HttpTransport` instead of `TcpStream`.

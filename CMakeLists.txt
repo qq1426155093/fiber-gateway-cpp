@@ -33,6 +33,7 @@ target_include_directories(fiber_lib PUBLIC ${CMAKE_CURRENT_LIST_DIR}/src)
 target_include_directories(fiber_lib PUBLIC
     ${CMAKE_CURRENT_LIST_DIR}/third_party/llparse/http1/generated
 )
+target_link_libraries(fiber_lib PUBLIC boringssl::ssl boringssl::crypto)
 target_sources(fiber_lib PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/third_party/llparse/http1/generated/llhttp.c
     ${CMAKE_CURRENT_LIST_DIR}/third_party/llparse/http1/generated/http.c
