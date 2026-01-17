@@ -4,16 +4,24 @@
 #include <chrono>
 #include <coroutine>
 
+#include "../common/Assert.h"
 #include "../event/EventLoop.h"
 
 namespace fiber::async {
 
-class SleepAwaiter {
+    class SleepAwaiter {
 public:
     explicit SleepAwaiter(std::chrono::steady_clock::duration delay);
     SleepAwaiter(const SleepAwaiter &) = delete;
     SleepAwaiter &operator=(const SleepAwaiter &) = delete;
-    SleepAwaiter(SleepAwaiter &&) = delete;
+    SleepAwaiter(SleepAwaiter &&other) noexcept : delay_(other.delay_) {
+        FIBER_ASSERT(!other.armed_);
+        timer_.owner = this;
+        other.timer_.owner = nullptr;
+        other.loop_ = nullptr;
+        other.handle_ = {};
+        other.armed_ = false;
+    }
     SleepAwaiter &operator=(SleepAwaiter &&) = delete;
     ~SleepAwaiter();
 

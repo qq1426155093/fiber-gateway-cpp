@@ -164,6 +164,7 @@ void EventLoop::run() {
     EventLoop *prev = current_;
     current_ = this;
     stop_requested_.store(false, std::memory_order_release);
+    now_ = std::chrono::steady_clock::now();
     drain_notify<false>();
     do {
         run_once();

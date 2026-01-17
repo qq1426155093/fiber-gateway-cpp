@@ -70,18 +70,14 @@ public:
 
     template<typename A>
     TimeoutAwaiter(A &&awaitable, std::chrono::steady_clock::duration timeout) :
-        awaiter_(detail::get_awaiter(std::forward<A>(awaitable))), timeout_(timeout), has_deadline_(false) {}
-
-    template<typename A>
-    TimeoutAwaiter(A &&awaitable, std::chrono::steady_clock::time_point deadline) :
-        awaiter_(detail::get_awaiter(std::forward<A>(awaitable))), deadline_(deadline), has_deadline_(true) {}
+        awaiter_(detail::get_awaiter(std::forward<A>(awaitable))), timeout_(timeout) {}
 
     TimeoutAwaiter(const TimeoutAwaiter &) = delete;
     TimeoutAwaiter &operator=(const TimeoutAwaiter &) = delete;
     TimeoutAwaiter(TimeoutAwaiter &&) = delete;
     TimeoutAwaiter &operator=(TimeoutAwaiter &&) = delete;
     ~TimeoutAwaiter() {
-        if (loop_) {
+        if (loop_ && timer_entry_.is_in_heap()) {
             loop_->cancel<TimeoutAwaiter, &TimeoutAwaiter::timer_entry_>(*this);
         }
     }
@@ -120,9 +116,10 @@ public:
         if (timed_out_) {
             return std::unexpected(fiber::common::IoErr::TimedOut);
         }
-        if (loop_) {
+        if (loop_ && timer_entry_.is_in_heap()) {
             loop_->cancel<TimeoutAwaiter, &TimeoutAwaiter::timer_entry_>(*this);
         }
+
         if constexpr (detail::kIsIoResult<InnerResult>) {
             return awaiter_.await_resume();
         } else if constexpr (std::is_void_v<std::remove_cvref_t<InnerResult>>) {
@@ -135,31 +132,16 @@ public:
 
 private:
     static void on_timeout(TimeoutAwaiter *awaiter) {
-        if (!awaiter) {
-            return;
-        }
         awaiter->timed_out_ = true;
         awaiter->handle_.resume();
     }
 
-    [[nodiscard]] bool expired_now() const {
-        if (has_deadline_) {
-            return deadline_ <= std::chrono::steady_clock::now();
-        }
-        return timeout_ <= std::chrono::steady_clock::duration::zero();
-    }
+    [[nodiscard]] bool expired_now() const { return timeout_ <= std::chrono::steady_clock::duration::zero(); }
 
-    [[nodiscard]] std::chrono::steady_clock::time_point deadline_for_timer() const {
-        if (has_deadline_) {
-            return deadline_;
-        }
-        return std::chrono::steady_clock::now() + timeout_;
-    }
+    [[nodiscard]] std::chrono::steady_clock::time_point deadline_for_timer() const { return loop_->now() + timeout_; }
 
     InnerAwaiter awaiter_;
     std::chrono::steady_clock::duration timeout_{};
-    std::chrono::steady_clock::time_point deadline_{};
-    bool has_deadline_ = false;
     fiber::event::EventLoop *loop_ = nullptr;
     std::coroutine_handle<> handle_{};
     fiber::event::EventLoop::TimerEntry timer_entry_{};
