@@ -1,5 +1,6 @@
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -9,8 +10,8 @@
 
 #include <sys/socket.h>
 
-#include "async/CoroutineFramePool.h"
 #include "async/Spawn.h"
+#include "async/Timeout.h"
 #include "common/IoError.h"
 #include "event/EventLoop.h"
 #include "net/SocketAddress.h"
@@ -51,10 +52,16 @@ DetachedTask echo_session(std::unique_ptr<fiber::net::TcpStream> stream) {
     std::array<char, 4096> buffer{};
     const std::string peer = stream->remote_addr().to_string();
     for (;;) {
-        auto read_result = co_await stream->read(buffer.data(), buffer.size());
+        auto read_result = co_await fiber::async::timeout_for(
+            [&]() { return stream->read(buffer.data(), buffer.size()); },
+            std::chrono::minutes(1));
         if (!read_result) {
-            std::cerr << "read error from " << peer << ": "
-                      << fiber::common::io_err_name(read_result.error()) << '\n';
+            if (read_result.error() == IoErr::TimedOut) {
+                std::cerr << "idle timeout from " << peer << '\n';
+            } else {
+                std::cerr << "read error from " << peer << ": "
+                          << fiber::common::io_err_name(read_result.error()) << '\n';
+            }
             break;
         }
         if (*read_result == 0) {
@@ -81,10 +88,26 @@ DetachedTask echo_session(std::unique_ptr<fiber::net::TcpStream> stream) {
     co_return;
 }
 
-DetachedTask accept_loop(fiber::event::EventLoop *loop,
-                         fiber::net::TcpListener *listener) {
+DetachedTask accept_loop(fiber::event::EventLoop *loop, std::uint16_t port) {
+    fiber::net::TcpListener listener(*loop);
+    fiber::net::ListenOptions options{};
+    fiber::net::SocketAddress addr = fiber::net::SocketAddress::any_v4(port);
+    auto bind_result = listener.bind(addr, options);
+    if (!bind_result) {
+        std::cerr << "bind failed: " << fiber::common::io_err_name(bind_result.error()) << '\n';
+        loop->stop();
+        co_return;
+    }
+
+    auto bound_port = resolve_port(listener.fd());
+    if (bound_port) {
+        std::cout << "listening on 0.0.0.0:" << *bound_port << '\n';
+    } else {
+        std::cout << "listening on 0.0.0.0\n";
+    }
+
     for (;;) {
-        auto accept_result = co_await listener->accept();
+        auto accept_result = co_await listener.accept();
         if (!accept_result) {
             IoErr err = accept_result.error();
             std::cerr << "accept error: " << fiber::common::io_err_name(err) << '\n';
@@ -122,26 +145,9 @@ int main(int argc, char **argv) {
     }
 
     fiber::event::EventLoop loop;
-    fiber::async::CoroutineFrameAllocScope alloc_scope(&loop.frame_pool());
-
-    fiber::net::TcpListener listener(loop);
-    fiber::net::ListenOptions options{};
-    fiber::net::SocketAddress addr = fiber::net::SocketAddress::any_v4(port);
-    auto bind_result = listener.bind(addr, options);
-    if (!bind_result) {
-        std::cerr << "bind failed: " << fiber::common::io_err_name(bind_result.error()) << '\n';
-        return 1;
-    }
-
-    auto bound_port = resolve_port(listener.fd());
-    if (bound_port) {
-        std::cout << "listening on 0.0.0.0:" << *bound_port << '\n';
-    } else {
-        std::cout << "listening on 0.0.0.0\n";
-    }
 
     fiber::async::spawn(loop, [&]() {
-        return accept_loop(&loop, &listener);
+        return accept_loop(&loop, port);
     });
     loop.run();
     return 0;

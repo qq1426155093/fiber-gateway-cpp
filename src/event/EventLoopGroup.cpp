@@ -37,7 +37,6 @@ void EventLoopGroup::start_with_mask(const fiber::async::SignalSet *mask) {
             pthread_sigmask(SIG_BLOCK, &copy.native(), nullptr);
             const auto index = thread.index();
             EventLoop &loop = *loops_[index];
-            fiber::async::CoroutineFrameAllocScope alloc_scope(&loop.frame_pool());
             loop.run();
         });
         return;
@@ -45,7 +44,6 @@ void EventLoopGroup::start_with_mask(const fiber::async::SignalSet *mask) {
     threads_.start([this](fiber::async::ThreadGroup::Thread &thread) {
         const auto index = thread.index();
         EventLoop &loop = *loops_[index];
-        fiber::async::CoroutineFrameAllocScope alloc_scope(&loop.frame_pool());
         loop.run();
     });
 }

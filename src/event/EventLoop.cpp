@@ -161,6 +161,7 @@ void EventLoop::run() {
     if (event_fd_ < 0 || !poller_.valid()) {
         return;
     }
+    fiber::async::CoroutineFrameAllocScope alloc_scope(&frame_pool_);
     EventLoop *prev = current_;
     current_ = this;
     stop_requested_.store(false, std::memory_order_release);

@@ -72,6 +72,18 @@ public:
     TimeoutAwaiter(A &&awaitable, std::chrono::steady_clock::duration timeout) :
         awaiter_(detail::get_awaiter(std::forward<A>(awaitable))), timeout_(timeout) {}
 
+    template<typename Factory>
+        requires(std::invocable<Factory &> &&
+                 std::same_as<std::remove_cvref_t<std::invoke_result_t<Factory &>>, InnerAwaiter>)
+    TimeoutAwaiter(std::in_place_t, Factory &&factory, std::chrono::steady_clock::duration timeout) :
+        awaiter_(std::invoke(std::forward<Factory>(factory))), timeout_(timeout) {}
+
+    template<typename Factory>
+        requires(std::invocable<Factory &> &&
+                 !std::same_as<std::remove_cvref_t<std::invoke_result_t<Factory &>>, InnerAwaiter>)
+    TimeoutAwaiter(std::in_place_t, Factory &&factory, std::chrono::steady_clock::duration timeout) :
+        awaiter_(detail::get_awaiter(std::invoke(std::forward<Factory>(factory)))), timeout_(timeout) {}
+
     TimeoutAwaiter(const TimeoutAwaiter &) = delete;
     TimeoutAwaiter &operator=(const TimeoutAwaiter &) = delete;
     TimeoutAwaiter(TimeoutAwaiter &&) = delete;
@@ -160,7 +172,7 @@ template<typename Factory>
 auto timeout_for(Factory &&factory, std::chrono::steady_clock::duration timeout) {
     using Awaitable = std::invoke_result_t<Factory &>;
     static_assert(!std::is_lvalue_reference_v<Awaitable>, "timeout_for factory must return prvalue awaitable");
-    return TimeoutAwaiter<Awaitable>(std::invoke(factory), timeout);
+    return TimeoutAwaiter<Awaitable>(std::in_place, std::forward<Factory>(factory), timeout);
 }
 
 } // namespace fiber::async
