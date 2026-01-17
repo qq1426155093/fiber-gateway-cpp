@@ -1,0 +1,118 @@
+include_guard()
+
+include(FetchContent)
+
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set_property(GLOBAL PROPERTY ALLOW_DUPLICATE_CUSTOM_TARGETS ON)
+
+set(BORINGSSL_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(BORINGSSL_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    boringssl
+    URL https://github.com/google/boringssl/archive/refs/tags/0.20251124.0.tar.gz
+)
+FetchContent_MakeAvailable(boringssl)
+
+if (TARGET ssl AND NOT TARGET boringssl::ssl)
+    add_library(boringssl::ssl ALIAS ssl)
+endif()
+if (TARGET crypto AND NOT TARGET boringssl::crypto)
+    add_library(boringssl::crypto ALIAS crypto)
+endif()
+
+set(ENABLE_APP OFF CACHE BOOL "" FORCE)
+set(ENABLE_DOC OFF CACHE BOOL "" FORCE)
+set(ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(ENABLE_HPACK_TOOLS OFF CACHE BOOL "" FORCE)
+set(ENABLE_LIB_ONLY ON CACHE BOOL "" FORCE)
+set(ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    nghttp2
+    URL https://github.com/nghttp2/nghttp2/archive/refs/tags/v1.68.0.tar.gz
+)
+FetchContent_MakeAvailable(nghttp2)
+
+if (NOT TARGET nghttp2::nghttp2)
+    if (TARGET nghttp2)
+        get_target_property(_nghttp2_real nghttp2 ALIASED_TARGET)
+        if (_nghttp2_real)
+            add_library(nghttp2::nghttp2 ALIAS ${_nghttp2_real})
+        else()
+            add_library(nghttp2::nghttp2 ALIAS nghttp2)
+        endif()
+    elseif (TARGET nghttp2_static)
+        add_library(nghttp2::nghttp2 ALIAS nghttp2_static)
+    endif()
+endif()
+
+set(BORINGSSL_INCLUDE_DIR "${boringssl_SOURCE_DIR}/include" CACHE PATH "" FORCE)
+set(BORINGSSL_LIBRARY_DIR "${boringssl_BINARY_DIR}" CACHE PATH "" FORCE)
+set(BORINGSSL_ROOT_DIR "${boringssl_BINARY_DIR}" CACHE PATH "" FORCE)
+set(ENABLE_BORINGSSL ON CACHE BOOL "" FORCE)
+set(ENABLE_OPENSSL OFF CACHE BOOL "" FORCE)
+set(ENABLE_GNUTLS OFF CACHE BOOL "" FORCE)
+set(ENABLE_PICOTLS OFF CACHE BOOL "" FORCE)
+set(ENABLE_WOLFSSL OFF CACHE BOOL "" FORCE)
+set(ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+set(ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(ENABLE_APP OFF CACHE BOOL "" FORCE)
+set(ENABLE_LIB_ONLY ON CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    ngtcp2
+    URL https://github.com/ngtcp2/ngtcp2/archive/refs/tags/v1.19.0.tar.gz
+)
+FetchContent_MakeAvailable(ngtcp2)
+
+if (NOT TARGET ngtcp2::ngtcp2)
+    if (TARGET ngtcp2)
+        get_target_property(_ngtcp2_real ngtcp2 ALIASED_TARGET)
+        if (_ngtcp2_real)
+            add_library(ngtcp2::ngtcp2 ALIAS ${_ngtcp2_real})
+        else()
+            add_library(ngtcp2::ngtcp2 ALIAS ngtcp2)
+        endif()
+    elseif (TARGET ngtcp2_static)
+        add_library(ngtcp2::ngtcp2 ALIAS ngtcp2_static)
+    endif()
+endif()
+if (NOT TARGET ngtcp2::crypto_boringssl)
+    if (TARGET ngtcp2_crypto_boringssl)
+        get_target_property(_ngtcp2_crypto_real ngtcp2_crypto_boringssl ALIASED_TARGET)
+        if (_ngtcp2_crypto_real)
+            add_library(ngtcp2::crypto_boringssl ALIAS ${_ngtcp2_crypto_real})
+        else()
+            add_library(ngtcp2::crypto_boringssl ALIAS ngtcp2_crypto_boringssl)
+        endif()
+    elseif (TARGET ngtcp2_crypto_boringssl_static)
+        add_library(ngtcp2::crypto_boringssl ALIAS ngtcp2_crypto_boringssl_static)
+    endif()
+endif()
+
+set(ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+set(ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(ENABLE_APP OFF CACHE BOOL "" FORCE)
+set(ENABLE_LIB_ONLY ON CACHE BOOL "" FORCE)
+FetchContent_Declare(
+    nghttp3
+    GIT_REPOSITORY https://github.com/ngtcp2/nghttp3.git
+    GIT_TAG v1.14.0
+    GIT_SHALLOW TRUE
+    GIT_SUBMODULES lib/sfparse
+)
+FetchContent_MakeAvailable(nghttp3)
+
+if (NOT TARGET nghttp3::nghttp3)
+    if (TARGET nghttp3)
+        get_target_property(_nghttp3_real nghttp3 ALIASED_TARGET)
+        if (_nghttp3_real)
+            add_library(nghttp3::nghttp3 ALIAS ${_nghttp3_real})
+        else()
+            add_library(nghttp3::nghttp3 ALIAS nghttp3)
+        endif()
+    elseif (TARGET nghttp3_static)
+        add_library(nghttp3::nghttp3 ALIAS nghttp3_static)
+    endif()
+endif()
