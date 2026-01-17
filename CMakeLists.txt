@@ -22,6 +22,9 @@ endif()
 
 project(fiber)
 
+set(FIBER_DEPS_DIR "${CMAKE_CURRENT_LIST_DIR}/temp/_deps" CACHE PATH "Shared deps download directory")
+set(FETCHCONTENT_BASE_DIR "${FIBER_DEPS_DIR}" CACHE PATH "FetchContent base directory")
+
 include(cmake/Deps.cmake)
 
 set(CMAKE_CXX_STANDARD 23)
@@ -73,6 +76,7 @@ if(FIBER_BUILD_TESTS)
         if (FIBER_FETCH_DEPS)
             include(FetchContent)
             set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
+            fiber_use_cached_content(googletest)
             FetchContent_Declare(
                 googletest
                 URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip

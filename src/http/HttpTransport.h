@@ -8,8 +8,8 @@
 #include "../common/IoError.h"
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
+#include "../async/Task.h"
 #include "../net/TcpStream.h"
-#include "HttpTask.h"
 #include "TlsContext.h"
 
 struct bio_st;
@@ -21,14 +21,14 @@ class HttpTransport : public common::NonCopyable, public common::NonMovable {
 public:
     virtual ~HttpTransport() = default;
 
-    virtual HttpTask<common::IoResult<void>> handshake(std::chrono::seconds timeout) = 0;
-    virtual HttpTask<common::IoResult<void>> shutdown(std::chrono::seconds timeout) = 0;
-    virtual HttpTask<common::IoResult<size_t>> read(void *buf,
-                                                    size_t len,
-                                                    std::chrono::seconds timeout) = 0;
-    virtual HttpTask<common::IoResult<size_t>> write(const void *buf,
-                                                     size_t len,
-                                                     std::chrono::seconds timeout) = 0;
+    virtual fiber::async::Task<common::IoResult<void>> handshake(std::chrono::seconds timeout) = 0;
+    virtual fiber::async::Task<common::IoResult<void>> shutdown(std::chrono::seconds timeout) = 0;
+    virtual fiber::async::Task<common::IoResult<size_t>> read(void *buf,
+                                                              size_t len,
+                                                              std::chrono::seconds timeout) = 0;
+    virtual fiber::async::Task<common::IoResult<size_t>> write(const void *buf,
+                                                               size_t len,
+                                                               std::chrono::seconds timeout) = 0;
     virtual void close() = 0;
     [[nodiscard]] virtual bool valid() const noexcept = 0;
     [[nodiscard]] virtual int fd() const noexcept = 0;
@@ -39,14 +39,14 @@ class TcpTransport final : public HttpTransport {
 public:
     explicit TcpTransport(std::unique_ptr<net::TcpStream> stream);
 
-    HttpTask<common::IoResult<void>> handshake(std::chrono::seconds timeout) override;
-    HttpTask<common::IoResult<void>> shutdown(std::chrono::seconds timeout) override;
-    HttpTask<common::IoResult<size_t>> read(void *buf,
-                                            size_t len,
-                                            std::chrono::seconds timeout) override;
-    HttpTask<common::IoResult<size_t>> write(const void *buf,
-                                             size_t len,
-                                             std::chrono::seconds timeout) override;
+    fiber::async::Task<common::IoResult<void>> handshake(std::chrono::seconds timeout) override;
+    fiber::async::Task<common::IoResult<void>> shutdown(std::chrono::seconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> read(void *buf,
+                                                      size_t len,
+                                                      std::chrono::seconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> write(const void *buf,
+                                                       size_t len,
+                                                       std::chrono::seconds timeout) override;
     void close() override;
     [[nodiscard]] bool valid() const noexcept override;
     [[nodiscard]] int fd() const noexcept override;
@@ -62,14 +62,14 @@ public:
         std::unique_ptr<net::TcpStream> stream,
         TlsContext &context);
 
-    HttpTask<common::IoResult<void>> handshake(std::chrono::seconds timeout) override;
-    HttpTask<common::IoResult<void>> shutdown(std::chrono::seconds timeout) override;
-    HttpTask<common::IoResult<size_t>> read(void *buf,
-                                            size_t len,
-                                            std::chrono::seconds timeout) override;
-    HttpTask<common::IoResult<size_t>> write(const void *buf,
-                                             size_t len,
-                                             std::chrono::seconds timeout) override;
+    fiber::async::Task<common::IoResult<void>> handshake(std::chrono::seconds timeout) override;
+    fiber::async::Task<common::IoResult<void>> shutdown(std::chrono::seconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> read(void *buf,
+                                                      size_t len,
+                                                      std::chrono::seconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> write(const void *buf,
+                                                       size_t len,
+                                                       std::chrono::seconds timeout) override;
     void close() override;
     [[nodiscard]] bool valid() const noexcept override;
     [[nodiscard]] int fd() const noexcept override;
@@ -79,8 +79,8 @@ private:
     TlsTransport(std::unique_ptr<net::TcpStream> stream, TlsContext &context);
     common::IoResult<void> init();
 
-    HttpTask<common::IoResult<void>> flush_wbio(std::chrono::seconds timeout);
-    HttpTask<common::IoResult<size_t>> read_raw(std::chrono::seconds timeout);
+    fiber::async::Task<common::IoResult<void>> flush_wbio(std::chrono::seconds timeout);
+    fiber::async::Task<common::IoResult<size_t>> read_raw(std::chrono::seconds timeout);
 
     std::unique_ptr<net::TcpStream> stream_;
     TlsContext *context_ = nullptr;

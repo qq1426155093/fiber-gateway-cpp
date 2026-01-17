@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 
+#include "../async/Task.h"
 #include "../common/IoError.h"
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
@@ -22,29 +23,29 @@ public:
                     const HttpServerOptions &options,
                     HttpHandler handler);
 
-    HttpTask<void> run();
+    fiber::async::Task<void> run();
 
-    HttpTask<common::IoResult<ReadBodyResult>> read_body(HttpExchange &exchange,
+    fiber::async::Task<common::IoResult<ReadBodyResult>> read_body(HttpExchange &exchange,
                                                          void *buf,
                                                          size_t len);
-    HttpTask<common::IoResult<void>> discard_body(HttpExchange &exchange);
-    HttpTask<common::IoResult<void>> send_response_header(HttpExchange &exchange,
+    fiber::async::Task<common::IoResult<void>> discard_body(HttpExchange &exchange);
+    fiber::async::Task<common::IoResult<void>> send_response_header(HttpExchange &exchange,
                                                           int status,
                                                           std::string_view reason);
-    HttpTask<common::IoResult<size_t>> write_body(HttpExchange &exchange,
+    fiber::async::Task<common::IoResult<size_t>> write_body(HttpExchange &exchange,
                                                   const void *buf,
                                                   size_t len,
                                                   bool end);
 
 private:
     common::IoResult<void> ensure_header_defaults(HttpExchange &exchange);
-    HttpTask<common::IoResult<void>> write_all(const void *data, size_t len);
-    HttpTask<common::IoResult<void>> send_continue_if_needed(HttpExchange &exchange);
-    HttpTask<common::IoResult<void>> drain_body(HttpExchange &exchange);
+    fiber::async::Task<common::IoResult<void>> write_all(const void *data, size_t len);
+    fiber::async::Task<common::IoResult<void>> send_continue_if_needed(HttpExchange &exchange);
+    fiber::async::Task<common::IoResult<void>> drain_body(HttpExchange &exchange);
     common::IoResult<void> finalize_response_body(HttpExchange &exchange, bool end);
     static std::string default_reason(int status);
 
-    HttpTask<common::IoResult<size_t>> read_from_stream(std::chrono::seconds timeout);
+    fiber::async::Task<common::IoResult<size_t>> read_from_stream(std::chrono::seconds timeout);
     void consume_buffer(size_t len);
 
     std::unique_ptr<HttpTransport> transport_;

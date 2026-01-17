@@ -41,22 +41,22 @@ public:
     bool request_chunked() const;
     size_t request_content_length() const;
 
-    HttpTask<fiber::common::IoResult<ReadBodyResult>> read_body(void *buf, size_t len) noexcept;
-    HttpTask<fiber::common::IoResult<void>> discard_body() noexcept;
+    fiber::async::Task<fiber::common::IoResult<ReadBodyResult>> read_body(void *buf, size_t len) noexcept;
+    fiber::async::Task<fiber::common::IoResult<void>> discard_body() noexcept;
 
     void set_response_header(std::string_view name, std::string_view value);
     void set_response_content_length(size_t len);
     void set_response_chunked();
     void set_response_close();
 
-    HttpTask<fiber::common::IoResult<void>> send_response_header(int status,
-                                                                 std::string_view reason = {});
-    HttpTask<fiber::common::IoResult<size_t>> write_body(const void *buf,
-                                                         size_t len,
-                                                         bool end) noexcept;
+    fiber::async::Task<fiber::common::IoResult<void>> send_response_header(int status,
+                                                                           std::string_view reason = {});
+    fiber::async::Task<fiber::common::IoResult<size_t>> write_body(const void *buf,
+                                                                   size_t len,
+                                                                   bool end) noexcept;
 };
 
-using HttpHandler = std::function<fiber::http::HttpTask<void>(HttpExchange &)>;
+using HttpHandler = std::function<fiber::async::Task<void>(HttpExchange &)>;
 
 class Http1Server : public common::NonCopyable, public common::NonMovable {
 public:

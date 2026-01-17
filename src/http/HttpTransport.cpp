@@ -13,15 +13,15 @@ namespace fiber::http {
 TcpTransport::TcpTransport(std::unique_ptr<net::TcpStream> stream) : stream_(std::move(stream)) {
 }
 
-HttpTask<common::IoResult<void>> TcpTransport::handshake(std::chrono::seconds) {
+fiber::async::Task<common::IoResult<void>> TcpTransport::handshake(std::chrono::seconds) {
     co_return common::IoResult<void>{};
 }
 
-HttpTask<common::IoResult<void>> TcpTransport::shutdown(std::chrono::seconds) {
+fiber::async::Task<common::IoResult<void>> TcpTransport::shutdown(std::chrono::seconds) {
     co_return common::IoResult<void>{};
 }
 
-HttpTask<common::IoResult<size_t>> TcpTransport::read(void *buf,
+fiber::async::Task<common::IoResult<size_t>> TcpTransport::read(void *buf,
                                                       size_t len,
                                                       std::chrono::seconds timeout) {
     auto result = co_await fiber::async::timeout_for(
@@ -32,7 +32,7 @@ HttpTask<common::IoResult<size_t>> TcpTransport::read(void *buf,
     co_return *result;
 }
 
-HttpTask<common::IoResult<size_t>> TcpTransport::write(const void *buf,
+fiber::async::Task<common::IoResult<size_t>> TcpTransport::write(const void *buf,
                                                        size_t len,
                                                        std::chrono::seconds timeout) {
     auto result = co_await fiber::async::timeout_for(
@@ -112,7 +112,7 @@ common::IoResult<void> TlsTransport::init() {
     return {};
 }
 
-HttpTask<common::IoResult<void>> TlsTransport::handshake(std::chrono::seconds timeout) {
+fiber::async::Task<common::IoResult<void>> TlsTransport::handshake(std::chrono::seconds timeout) {
     if (handshake_done_) {
         co_return common::IoResult<void>{};
     }
@@ -162,7 +162,7 @@ HttpTask<common::IoResult<void>> TlsTransport::handshake(std::chrono::seconds ti
     }
 }
 
-HttpTask<common::IoResult<void>> TlsTransport::shutdown(std::chrono::seconds timeout) {
+fiber::async::Task<common::IoResult<void>> TlsTransport::shutdown(std::chrono::seconds timeout) {
     if (!ssl_ || !handshake_done_) {
         co_return common::IoResult<void>{};
     }
@@ -174,7 +174,7 @@ HttpTask<common::IoResult<void>> TlsTransport::shutdown(std::chrono::seconds tim
     co_return common::IoResult<void>{};
 }
 
-HttpTask<common::IoResult<size_t>> TlsTransport::read(void *buf,
+fiber::async::Task<common::IoResult<size_t>> TlsTransport::read(void *buf,
                                                       size_t len,
                                                       std::chrono::seconds timeout) {
     auto hs_result = co_await handshake(context_->options().handshake_timeout);
@@ -215,7 +215,7 @@ HttpTask<common::IoResult<size_t>> TlsTransport::read(void *buf,
     }
 }
 
-HttpTask<common::IoResult<size_t>> TlsTransport::write(const void *buf,
+fiber::async::Task<common::IoResult<size_t>> TlsTransport::write(const void *buf,
                                                        size_t len,
                                                        std::chrono::seconds timeout) {
     auto hs_result = co_await handshake(context_->options().handshake_timeout);
@@ -282,7 +282,7 @@ const net::SocketAddress &TlsTransport::remote_addr() const noexcept {
     return stream_->remote_addr();
 }
 
-HttpTask<common::IoResult<void>> TlsTransport::flush_wbio(std::chrono::seconds timeout) {
+fiber::async::Task<common::IoResult<void>> TlsTransport::flush_wbio(std::chrono::seconds timeout) {
     if (!wbio_) {
         co_return common::IoResult<void>{};
     }
@@ -315,7 +315,7 @@ HttpTask<common::IoResult<void>> TlsTransport::flush_wbio(std::chrono::seconds t
     co_return common::IoResult<void>{};
 }
 
-HttpTask<common::IoResult<size_t>> TlsTransport::read_raw(std::chrono::seconds timeout) {
+fiber::async::Task<common::IoResult<size_t>> TlsTransport::read_raw(std::chrono::seconds timeout) {
     std::array<char, 8192> buffer{};
     auto read_result = co_await fiber::async::timeout_for(
         [&]() { return stream_->read(buffer.data(), buffer.size()); }, timeout);

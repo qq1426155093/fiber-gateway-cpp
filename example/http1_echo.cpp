@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 
 #include "async/Spawn.h"
+#include "async/Task.h"
 #include "common/IoError.h"
 #include "event/EventLoop.h"
 #include "http/Http1Server.h"
@@ -41,7 +42,7 @@ fiber::common::IoResult<std::uint16_t> resolve_port(int fd) {
     return local.port();
 }
 
-fiber::http::HttpTask<void> handle_echo(fiber::http::HttpExchange &exchange) {
+fiber::async::Task<void> handle_echo(fiber::http::HttpExchange &exchange) {
     std::array<char, 4096> buffer{};
     std::string body;
     for (;;) {

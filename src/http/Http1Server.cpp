@@ -51,7 +51,7 @@ Http1Connection::Http1Connection(std::unique_ptr<HttpTransport> transport,
       exchange_(*this, options_) {
 }
 
-HttpTask<void> Http1Connection::run() {
+fiber::async::Task<void> Http1Connection::run() {
     if (transport_) {
         auto handshake_result = co_await transport_->handshake(options_.tls.handshake_timeout);
         if (!handshake_result) {
@@ -151,7 +151,7 @@ HttpTask<void> Http1Connection::run() {
     co_return;
 }
 
-HttpTask<common::IoResult<ReadBodyResult>> Http1Connection::read_body(HttpExchange &exchange,
+fiber::async::Task<common::IoResult<ReadBodyResult>> Http1Connection::read_body(HttpExchange &exchange,
                                                                       void *buf,
                                                                       size_t len) {
     if (exchange.body_complete_ && exchange.body_buffer_.empty()) {
@@ -211,7 +211,7 @@ HttpTask<common::IoResult<ReadBodyResult>> Http1Connection::read_body(HttpExchan
     co_return ReadBodyResult{0, false};
 }
 
-HttpTask<common::IoResult<void>> Http1Connection::discard_body(HttpExchange &exchange) {
+fiber::async::Task<common::IoResult<void>> Http1Connection::discard_body(HttpExchange &exchange) {
     std::array<char, 4096> buffer{};
     for (;;) {
         auto result = co_await read_body(exchange, buffer.data(), buffer.size());
@@ -225,7 +225,7 @@ HttpTask<common::IoResult<void>> Http1Connection::discard_body(HttpExchange &exc
     co_return common::IoResult<void>{};
 }
 
-HttpTask<common::IoResult<void>> Http1Connection::send_response_header(HttpExchange &exchange,
+fiber::async::Task<common::IoResult<void>> Http1Connection::send_response_header(HttpExchange &exchange,
                                                                        int status,
                                                                        std::string_view reason) {
     if (exchange.response_header_sent_) {
@@ -292,7 +292,7 @@ HttpTask<common::IoResult<void>> Http1Connection::send_response_header(HttpExcha
     co_return common::IoResult<void>{};
 }
 
-HttpTask<common::IoResult<size_t>> Http1Connection::write_body(HttpExchange &exchange,
+fiber::async::Task<common::IoResult<size_t>> Http1Connection::write_body(HttpExchange &exchange,
                                                                const void *buf,
                                                                size_t len,
                                                                bool end) {
@@ -372,7 +372,7 @@ common::IoResult<void> Http1Connection::ensure_header_defaults(HttpExchange &exc
     return {};
 }
 
-HttpTask<common::IoResult<void>> Http1Connection::write_all(const void *data, size_t len) {
+fiber::async::Task<common::IoResult<void>> Http1Connection::write_all(const void *data, size_t len) {
     const char *ptr = static_cast<const char *>(data);
     size_t remaining = len;
     while (remaining > 0) {
@@ -389,7 +389,7 @@ HttpTask<common::IoResult<void>> Http1Connection::write_all(const void *data, si
     co_return common::IoResult<void>{};
 }
 
-HttpTask<common::IoResult<void>> Http1Connection::send_continue_if_needed(HttpExchange &exchange) {
+fiber::async::Task<common::IoResult<void>> Http1Connection::send_continue_if_needed(HttpExchange &exchange) {
     if (!exchange.request_expect_continue_ || exchange.continue_sent_ ||
         !options_.auto_100_continue) {
         co_return common::IoResult<void>{};
@@ -402,7 +402,7 @@ HttpTask<common::IoResult<void>> Http1Connection::send_continue_if_needed(HttpEx
     co_return common::IoResult<void>{};
 }
 
-HttpTask<common::IoResult<void>> Http1Connection::drain_body(HttpExchange &exchange) {
+fiber::async::Task<common::IoResult<void>> Http1Connection::drain_body(HttpExchange &exchange) {
     auto result = co_await discard_body(exchange);
     if (!result) {
         co_return std::unexpected(result.error());
@@ -451,7 +451,7 @@ std::string Http1Connection::default_reason(int status) {
     }
 }
 
-HttpTask<common::IoResult<size_t>> Http1Connection::read_from_stream(std::chrono::seconds timeout) {
+fiber::async::Task<common::IoResult<size_t>> Http1Connection::read_from_stream(std::chrono::seconds timeout) {
     std::array<char, 8192> buffer{};
     auto read_result = co_await transport_->read(buffer.data(), buffer.size(), timeout);
     if (!read_result) {

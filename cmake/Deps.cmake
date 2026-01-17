@@ -2,6 +2,32 @@ include_guard()
 
 include(FetchContent)
 
+if (NOT DEFINED FETCHCONTENT_BASE_DIR)
+    set(FETCHCONTENT_BASE_DIR "${CMAKE_CURRENT_LIST_DIR}/../temp/_deps" CACHE PATH "FetchContent base directory")
+endif()
+
+function(fiber_clear_invalid_source_dir name)
+    string(TOUPPER "${name}" name_upper)
+    set(var "FETCHCONTENT_SOURCE_DIR_${name_upper}")
+    if (DEFINED ${var})
+        if ("${${var}}" STREQUAL "" OR NOT EXISTS "${${var}}/CMakeLists.txt")
+            unset(${var} CACHE)
+        endif()
+    endif()
+endfunction()
+
+function(fiber_use_cached_content name)
+    string(TOUPPER "${name}" name_upper)
+    set(var "FETCHCONTENT_SOURCE_DIR_${name_upper}")
+    fiber_clear_invalid_source_dir("${name}")
+    if (NOT DEFINED ${var})
+        set(src "${FETCHCONTENT_BASE_DIR}/${name}-src")
+        if (EXISTS "${src}/CMakeLists.txt")
+            set(${var} "${src}" CACHE PATH "Use cached ${name} source directory")
+        endif()
+    endif()
+endfunction()
+
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
@@ -10,6 +36,7 @@ set_property(GLOBAL PROPERTY ALLOW_DUPLICATE_CUSTOM_TARGETS ON)
 
 set(BORINGSSL_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(BORINGSSL_INSTALL OFF CACHE BOOL "" FORCE)
+fiber_use_cached_content(boringssl)
 FetchContent_Declare(
     boringssl
     URL https://github.com/google/boringssl/archive/refs/tags/0.20251124.0.tar.gz
@@ -29,6 +56,7 @@ set(ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(ENABLE_HPACK_TOOLS OFF CACHE BOOL "" FORCE)
 set(ENABLE_LIB_ONLY ON CACHE BOOL "" FORCE)
 set(ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+fiber_use_cached_content(nghttp2)
 FetchContent_Declare(
     nghttp2
     URL https://github.com/nghttp2/nghttp2/archive/refs/tags/v1.68.0.tar.gz
@@ -60,6 +88,7 @@ set(ENABLE_TESTS OFF CACHE BOOL "" FORCE)
 set(ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(ENABLE_APP OFF CACHE BOOL "" FORCE)
 set(ENABLE_LIB_ONLY ON CACHE BOOL "" FORCE)
+fiber_use_cached_content(ngtcp2)
 FetchContent_Declare(
     ngtcp2
     URL https://github.com/ngtcp2/ngtcp2/archive/refs/tags/v1.19.0.tar.gz
@@ -95,6 +124,7 @@ set(ENABLE_TESTS OFF CACHE BOOL "" FORCE)
 set(ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(ENABLE_APP OFF CACHE BOOL "" FORCE)
 set(ENABLE_LIB_ONLY ON CACHE BOOL "" FORCE)
+fiber_use_cached_content(nghttp3)
 FetchContent_Declare(
     nghttp3
     GIT_REPOSITORY https://github.com/ngtcp2/nghttp3.git

@@ -83,11 +83,11 @@ size_t HttpExchange::request_content_length() const noexcept {
     return request_content_length_;
 }
 
-HttpTask<common::IoResult<ReadBodyResult>> HttpExchange::read_body(void *buf, size_t len) noexcept {
+fiber::async::Task<common::IoResult<ReadBodyResult>> HttpExchange::read_body(void *buf, size_t len) noexcept {
     co_return co_await connection_->read_body(*this, buf, len);
 }
 
-HttpTask<common::IoResult<void>> HttpExchange::discard_body() noexcept {
+fiber::async::Task<common::IoResult<void>> HttpExchange::discard_body() noexcept {
     co_return co_await connection_->discard_body(*this);
 }
 
@@ -110,12 +110,12 @@ void HttpExchange::set_response_close() {
     response_close_ = true;
 }
 
-HttpTask<common::IoResult<void>> HttpExchange::send_response_header(int status,
+fiber::async::Task<common::IoResult<void>> HttpExchange::send_response_header(int status,
                                                                     std::string_view reason) {
     co_return co_await connection_->send_response_header(*this, status, reason);
 }
 
-HttpTask<common::IoResult<size_t>> HttpExchange::write_body(const void *buf,
+fiber::async::Task<common::IoResult<size_t>> HttpExchange::write_body(const void *buf,
                                                             size_t len,
                                                             bool end) noexcept {
     co_return co_await connection_->write_body(*this, buf, len, end);

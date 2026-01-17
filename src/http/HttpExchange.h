@@ -13,8 +13,8 @@
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
 #include "../common/mem/BufPool.h"
+#include "../async/Task.h"
 #include "HttpHeaders.h"
-#include "HttpTask.h"
 #include "TlsOptions.h"
 
 namespace fiber::http {
@@ -52,19 +52,19 @@ public:
     bool request_chunked() const noexcept;
     size_t request_content_length() const noexcept;
 
-    HttpTask<common::IoResult<ReadBodyResult>> read_body(void *buf, size_t len) noexcept;
-    HttpTask<common::IoResult<void>> discard_body() noexcept;
+    fiber::async::Task<common::IoResult<ReadBodyResult>> read_body(void *buf, size_t len) noexcept;
+    fiber::async::Task<common::IoResult<void>> discard_body() noexcept;
 
     void set_response_header(std::string_view name, std::string_view value);
     void set_response_content_length(size_t len);
     void set_response_chunked();
     void set_response_close();
 
-    HttpTask<common::IoResult<void>> send_response_header(int status,
-                                                          std::string_view reason = {});
-    HttpTask<common::IoResult<size_t>> write_body(const void *buf,
-                                                  size_t len,
-                                                  bool end) noexcept;
+    fiber::async::Task<common::IoResult<void>> send_response_header(int status,
+                                                                    std::string_view reason = {});
+    fiber::async::Task<common::IoResult<size_t>> write_body(const void *buf,
+                                                            size_t len,
+                                                            bool end) noexcept;
 
 private:
     friend class Http1Connection;
@@ -102,7 +102,7 @@ private:
     bool continue_sent_ = false;
 };
 
-using HttpHandler = std::function<fiber::http::HttpTask<void>(HttpExchange &)>;
+using HttpHandler = std::function<fiber::async::Task<void>(HttpExchange &)>;
 
 } // namespace fiber::http
 

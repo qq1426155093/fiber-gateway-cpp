@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include "async/Spawn.h"
+#include "async/Task.h"
 #include "common/IoError.h"
 #include "event/EventLoop.h"
 #include "http/Http1Server.h"
@@ -136,7 +137,7 @@ fiber::common::IoResult<std::uint16_t> resolve_port(int fd) {
     return local.port();
 }
 
-fiber::http::HttpTask<void> handle_plain(fiber::http::HttpExchange &exchange) {
+fiber::async::Task<void> handle_plain(fiber::http::HttpExchange &exchange) {
     const char *body = "hello https\n";
     exchange.set_response_header("Content-Type", "text/plain");
     exchange.set_response_content_length(std::strlen(body));

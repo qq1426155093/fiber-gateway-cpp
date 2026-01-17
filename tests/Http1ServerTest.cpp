@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "async/Spawn.h"
+#include "async/Task.h"
 #include "common/IoError.h"
 #include "event/EventLoopGroup.h"
 #include "http/Http1Server.h"
@@ -94,7 +95,7 @@ TEST(Http1ServerTest, BasicGet) {
     auto server_future = server_promise.get_future();
 
     fiber::async::spawn(group.at(0), [&]() {
-        auto handler = [](fiber::http::HttpExchange &exchange) -> fiber::http::HttpTask<void> {
+        auto handler = [](fiber::http::HttpExchange &exchange) -> fiber::async::Task<void> {
             exchange.set_response_header("Content-Type", "text/plain");
             exchange.set_response_content_length(2);
             auto header_result = co_await exchange.send_response_header(200);
@@ -146,7 +147,7 @@ TEST(Http1ServerTest, ChunkedPost) {
     auto server_future = server_promise.get_future();
 
     fiber::async::spawn(group.at(0), [&]() {
-        auto handler = [](fiber::http::HttpExchange &exchange) -> fiber::http::HttpTask<void> {
+        auto handler = [](fiber::http::HttpExchange &exchange) -> fiber::async::Task<void> {
             std::array<char, 64> buffer{};
             std::string body;
             for (;;) {
