@@ -110,3 +110,17 @@ public:
 - Read+write overlap (both can wait).
 - Cancellation: awaiter destroyed while waiting should not resume.
 - Close: waiter resumes with `IoErr::Canceled`.
+
+## TLS Stream (detail::TlsStreamFd)
+
+`TlsStreamFd` drives BoringSSL directly on a non-blocking fd and reuses the
+poller wait strategy from `StreamFd`.
+
+- Holds `SSL*` + fd and calls `SSL_read`/`SSL_write` directly.
+- On `SSL_ERROR_WANT_READ/WRITE`, waits for the corresponding fd event and
+  retries internally until completion.
+- Provides `handshake()` and `shutdown()` awaiters in addition to `read/write`.
+- Only one in-flight TLS operation at a time (read/write/handshake/shutdown).
+- Awaiters must run on the owning `EventLoop` (no cross-thread waits).
+- `close()` cancels the waiter with `IoErr::Canceled` and frees `SSL*` while
+  leaving fd ownership to the caller (transport owns the socket).

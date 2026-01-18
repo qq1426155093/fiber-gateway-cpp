@@ -39,6 +39,8 @@ bool StreamFd::valid() const noexcept { return fd_ >= 0; }
 
 int StreamFd::fd() const noexcept { return fd_; }
 
+fiber::event::EventLoop &StreamFd::loop() const noexcept { return loop_; }
+
 void StreamFd::close() {
     FIBER_ASSERT(loop_.in_loop());
     if (fd_ < 0) {

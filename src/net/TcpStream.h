@@ -41,6 +41,7 @@ public:
     [[nodiscard]] static ConnectAwaiter connect(fiber::event::EventLoop &loop, const SocketAddress &peer) noexcept;
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] int fd() const noexcept;
+    [[nodiscard]] fiber::event::EventLoop &loop() const noexcept;
     [[nodiscard]] const SocketAddress &remote_addr() const noexcept;
     void close();
 

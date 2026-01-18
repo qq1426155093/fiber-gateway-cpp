@@ -201,17 +201,16 @@ struct TlsOptions {
 ### Transport Abstraction
 - Introduce internal `HttpTransport` interface for `read/write/close`.
 - `TcpTransport` wraps existing `TcpStream` and uses `async::timeout_for`.
-- `TlsTransport` wraps a `TcpStream` + BoringSSL `SSL*` with memory BIOs:
-  - Socket read -> `BIO_write(rbio, ...)`
-  - `SSL_read` provides plaintext to HTTP parser
-  - `SSL_write` produces ciphertext in wbio, flush via socket write
-- TLS handshake is driven in `TlsTransport` and respects `handshake_timeout`.
+- `TlsTransport` wraps a `TcpStream` + `detail::TlsStreamFd`:
+  - `SSL*` is bound to the non-blocking fd (no memory BIOs).
+  - `SSL_read`/`SSL_write` are driven directly; `WANT_READ/WRITE` waits on fd events.
+- TLS handshake is driven in `TlsStreamFd` and respects `handshake_timeout`.
 
 ### Handshake & Errors
-- `SSL_accept` loop; on `SSL_ERROR_WANT_READ/WRITE`, perform socket IO and retry.
-- On `SSL_ERROR_ZERO_RETURN`, treat as EOF.
-- Other errors map to `IoErr::Invalid` or `IoErr::ConnReset`.
-- `close()` performs `SSL_shutdown` and flushes pending wbio data.
+- `SSL_accept`/`SSL_connect` loop; on `SSL_ERROR_WANT_READ/WRITE`, wait for fd readiness and retry.
+- `SSL_ERROR_ZERO_RETURN` yields EOF or `IoErr::ConnReset` depending on operation.
+- `SSL_ERROR_SYSCALL` maps through `errno` when present; other errors map to `IoErr::Invalid`.
+- `close()` performs best-effort `SSL_shutdown` and frees `SSL*` (no awaited flush).
 
 ### ALPN
 - Server advertises and accepts `http/1.1` only.

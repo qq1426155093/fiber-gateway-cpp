@@ -62,6 +62,10 @@ int TcpStream::fd() const noexcept {
     return stream_.fd();
 }
 
+fiber::event::EventLoop &TcpStream::loop() const noexcept {
+    return stream_.loop();
+}
+
 const SocketAddress &TcpStream::remote_addr() const noexcept {
     return remote_addr_;
 }

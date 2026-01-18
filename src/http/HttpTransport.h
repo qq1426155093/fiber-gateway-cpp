@@ -12,8 +12,9 @@
 #include "../net/TcpStream.h"
 #include "TlsContext.h"
 
-struct bio_st;
-typedef struct bio_st BIO;
+namespace fiber::net::detail {
+class TlsStreamFd;
+}
 
 namespace fiber::http {
 
@@ -58,6 +59,7 @@ private:
 
 class TlsTransport final : public HttpTransport {
 public:
+    ~TlsTransport() override;
     static common::IoResult<std::unique_ptr<TlsTransport>> create(
         std::unique_ptr<net::TcpStream> stream,
         TlsContext &context);
@@ -79,16 +81,9 @@ private:
     TlsTransport(std::unique_ptr<net::TcpStream> stream, TlsContext &context);
     common::IoResult<void> init();
 
-    fiber::async::Task<common::IoResult<void>> flush_wbio(std::chrono::seconds timeout);
-    fiber::async::Task<common::IoResult<size_t>> read_raw(std::chrono::seconds timeout);
-
     std::unique_ptr<net::TcpStream> stream_;
     TlsContext *context_ = nullptr;
-    SSL *ssl_ = nullptr;
-    BIO *rbio_ = nullptr;
-    BIO *wbio_ = nullptr;
-    bool handshake_done_ = false;
-    bool is_server_ = true;
+    std::unique_ptr<net::detail::TlsStreamFd> tls_stream_{};
 };
 
 } // namespace fiber::http
