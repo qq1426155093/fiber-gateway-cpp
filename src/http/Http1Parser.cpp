@@ -39,8 +39,42 @@ static const uint32_t usual[] = {
     0xffffffff,
 };
 
+constexpr uint64_t pack_u64(char c0, char c1, char c2, char c3, char c4, char c5, char c6, char c7) {
+    return static_cast<uint64_t>(static_cast<unsigned char>(c0)) |
+           (static_cast<uint64_t>(static_cast<unsigned char>(c1)) << 8) |
+           (static_cast<uint64_t>(static_cast<unsigned char>(c2)) << 16) |
+           (static_cast<uint64_t>(static_cast<unsigned char>(c3)) << 24) |
+           (static_cast<uint64_t>(static_cast<unsigned char>(c4)) << 32) |
+           (static_cast<uint64_t>(static_cast<unsigned char>(c5)) << 40) |
+           (static_cast<uint64_t>(static_cast<unsigned char>(c6)) << 48) |
+           (static_cast<uint64_t>(static_cast<unsigned char>(c7)) << 56);
+}
+
+constexpr uint32_t pack_u32(char c0, char c1, char c2, char c3) {
+    return static_cast<uint32_t>(static_cast<unsigned char>(c0)) |
+           (static_cast<uint32_t>(static_cast<unsigned char>(c1)) << 8) |
+           (static_cast<uint32_t>(static_cast<unsigned char>(c2)) << 16) |
+           (static_cast<uint32_t>(static_cast<unsigned char>(c3)) << 24);
+}
+
+inline uint64_t load_u64_le(const char *p, size_t n) {
+    uint64_t v = 0;
+    for (size_t i = 0; i < n; ++i) {
+        v |= static_cast<uint64_t>(static_cast<unsigned char>(p[i])) << (i * 8);
+    }
+    return v;
+}
+
+inline uint32_t load_u32_le(const char *p, size_t n) {
+    uint32_t v = 0;
+    for (size_t i = 0; i < n; ++i) {
+        v |= static_cast<uint32_t>(static_cast<unsigned char>(p[i])) << (i * 8);
+    }
+    return v;
+}
+
 inline bool str3_cmp(const char *m, char c0, char c1, char c2, char) {
-    return m[0] == c0 && m[1] == c1 && m[2] == c2;
+    return load_u32_le(m, 3) == pack_u32(c0, c1, c2, 0);
 }
 
 inline bool str3Ocmp(const char *m, char c0, char, char c2, char c3) {
@@ -48,31 +82,80 @@ inline bool str3Ocmp(const char *m, char c0, char, char c2, char c3) {
 }
 
 inline bool str4cmp(const char *m, char c0, char c1, char c2, char c3) {
-    return m[0] == c0 && m[1] == c1 && m[2] == c2 && m[3] == c3;
+    return load_u32_le(m, 4) == pack_u32(c0, c1, c2, c3);
 }
 
 inline bool str5cmp(const char *m, char c0, char c1, char c2, char c3, char c4) {
-    return m[0] == c0 && m[1] == c1 && m[2] == c2 && m[3] == c3 && m[4] == c4;
+    return load_u64_le(m, 5) == pack_u64(c0, c1, c2, c3, c4, 0, 0, 0);
 }
 
 inline bool str6cmp(const char *m, char c0, char c1, char c2, char c3, char c4, char c5) {
-    return m[0] == c0 && m[1] == c1 && m[2] == c2 && m[3] == c3 && m[4] == c4 && m[5] == c5;
+    return load_u64_le(m, 6) == pack_u64(c0, c1, c2, c3, c4, c5, 0, 0);
 }
 
 inline bool str7cmp(const char *m, char c0, char c1, char c2, char c3, char c4, char c5, char c6) {
-    return m[0] == c0 && m[1] == c1 && m[2] == c2 && m[3] == c3 && m[4] == c4 && m[5] == c5 && m[6] == c6;
+    return load_u64_le(m, 7) == pack_u64(c0, c1, c2, c3, c4, c5, c6, 0);
 }
 
 inline bool str8cmp(const char *m, char c0, char c1, char c2, char c3, char c4, char c5, char c6, char c7) {
-    return m[0] == c0 && m[1] == c1 && m[2] == c2 && m[3] == c3 && m[4] == c4 && m[5] == c5 && m[6] == c6 && m[7] == c7;
+    return load_u64_le(m, 8) == pack_u64(c0, c1, c2, c3, c4, c5, c6, c7);
 }
 
 inline bool str9cmp(const char *m, char c0, char c1, char c2, char c3, char c4, char c5, char c6, char c7, char c8) {
-    return m[0] == c0 && m[1] == c1 && m[2] == c2 && m[3] == c3 && m[4] == c4 && m[5] == c5 && m[6] == c6 && m[7] == c7 && m[8] == c8;
+    return load_u64_le(m, 8) == pack_u64(c0, c1, c2, c3, c4, c5, c6, c7) &&
+           static_cast<unsigned char>(m[8]) == static_cast<unsigned char>(c8);
 }
 
 inline uint32_t ngx_hash(uint32_t key, unsigned char c) {
     return key * 31u + static_cast<uint32_t>(c);
+}
+
+constexpr uint32_t ngx_hash_lower(const char *s, size_t n) {
+    uint32_t h = 0;
+    for (size_t i = 0; i < n; ++i) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        if (c >= 'A' && c <= 'Z') {
+            c = static_cast<unsigned char>(c - 'A' + 'a');
+        }
+        h = h * 31u + c;
+    }
+    return h;
+}
+
+constexpr uint32_t kHashContentLength = ngx_hash_lower("content-length", 14);
+constexpr uint32_t kHashTransferEncoding = ngx_hash_lower("transfer-encoding", 17);
+constexpr uint32_t kHashConnection = ngx_hash_lower("connection", 10);
+constexpr uint32_t kHashExpect = ngx_hash_lower("expect", 6);
+
+constexpr uint64_t kContentLength0 = pack_u64('c', 'o', 'n', 't', 'e', 'n', 't', '-');
+constexpr uint64_t kContentLength1 = pack_u64('l', 'e', 'n', 'g', 't', 'h', 0, 0);
+constexpr uint64_t kTransferEncoding0 = pack_u64('t', 'r', 'a', 'n', 's', 'f', 'e', 'r');
+constexpr uint64_t kTransferEncoding1 = pack_u64('-', 'e', 'n', 'c', 'o', 'd', 'i', 'n');
+constexpr uint64_t kConnection0 = pack_u64('c', 'o', 'n', 'n', 'e', 'c', 't', 'i');
+constexpr uint64_t kExpect0 = pack_u64('e', 'x', 'p', 'e', 'c', 't', 0, 0);
+
+inline bool match_content_length(uint32_t hash, size_t len, const char *lc) {
+    return hash == kHashContentLength && len == 14 &&
+           load_u64_le(lc, 8) == kContentLength0 &&
+           load_u64_le(lc + 8, 6) == kContentLength1;
+}
+
+inline bool match_transfer_encoding(uint32_t hash, size_t len, const char *lc) {
+    return hash == kHashTransferEncoding && len == 17 &&
+           load_u64_le(lc, 8) == kTransferEncoding0 &&
+           load_u64_le(lc + 8, 8) == kTransferEncoding1 &&
+           lc[16] == 'g';
+}
+
+inline bool match_connection(uint32_t hash, size_t len, const char *lc) {
+    return hash == kHashConnection && len == 10 &&
+           load_u64_le(lc, 8) == kConnection0 &&
+           load_u64_le(lc + 8, 2) == pack_u64('o', 'n', 0, 0, 0, 0, 0, 0);
+}
+
+inline bool match_expect(uint32_t hash, size_t len, const char *lc) {
+    return hash == kHashExpect && len == 6 &&
+           load_u64_le(lc, 6) == kExpect0;
 }
 
 bool has_token(std::string_view value, std::string_view token) {
@@ -112,26 +195,6 @@ bool has_token(std::string_view value, std::string_view token) {
         }
     }
     return false;
-}
-
-bool equals_ascii_ci(std::string_view left, std::string_view right) {
-    if (left.size() != right.size()) {
-        return false;
-    }
-    for (size_t i = 0; i < left.size(); ++i) {
-        char a = left[i];
-        char b = right[i];
-        if (a >= 'A' && a <= 'Z') {
-            a = static_cast<char>(a - 'A' + 'a');
-        }
-        if (b >= 'A' && b <= 'Z') {
-            b = static_cast<char>(b - 'A' + 'a');
-        }
-        if (a != b) {
-            return false;
-        }
-    }
-    return true;
 }
 
 bool parse_transfer_encoding(std::string_view value, bool &chunked) {
@@ -320,7 +383,11 @@ HttpParseResult Http1Parser::execute(const char *data, size_t len) {
                         return fail(HttpParseError::HeadersTooLarge);
                     }
 
-                    if (equals_ascii_ci(name, "content-length")) {
+                    const bool lc_valid = name_len <= kLowcaseHeaderLen;
+                    const uint32_t name_hash = request_state_.header_hash;
+                    const char *lc = request_state_.lowcase_header;
+
+                    if (lc_valid && match_content_length(name_hash, name_len, lc)) {
                         size_t length = 0;
                         auto res = std::from_chars(value.data(), value.data() + value.size(), length);
                         if (res.ec != std::errc() || res.ptr != value.data() + value.size()) {
@@ -331,17 +398,17 @@ HttpParseResult Http1Parser::execute(const char *data, size_t len) {
                         }
                         exchange_->request_content_length_ = length;
                         exchange_->request_content_length_set_ = true;
-                    } else if (equals_ascii_ci(name, "transfer-encoding")) {
+                    } else if (lc_valid && match_transfer_encoding(name_hash, name_len, lc)) {
                         bool chunked = false;
                         if (!parse_transfer_encoding(value, chunked)) {
                             return fail(HttpParseError::UnsupportedTransferEncoding);
                         }
                         exchange_->request_chunked_ = chunked;
-                    } else if (equals_ascii_ci(name, "expect")) {
+                    } else if (lc_valid && match_expect(name_hash, name_len, lc)) {
                         if (has_token(value, "100-continue")) {
                             exchange_->request_expect_continue_ = true;
                         }
-                    } else if (equals_ascii_ci(name, "connection")) {
+                    } else if (lc_valid && match_connection(name_hash, name_len, lc)) {
                         if (has_token(value, "close")) {
                             connection_close_ = true;
                         }
