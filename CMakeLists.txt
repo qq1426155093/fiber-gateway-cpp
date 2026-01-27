@@ -33,15 +33,7 @@ file(GLOB_RECURSE CPP_SRC_LIST ${CMAKE_CURRENT_LIST_DIR}/src/*.cpp)
 
 add_library(fiber_lib STATIC ${CPP_SRC_LIST})
 target_include_directories(fiber_lib PUBLIC ${CMAKE_CURRENT_LIST_DIR}/src)
-target_include_directories(fiber_lib PUBLIC
-    ${CMAKE_CURRENT_LIST_DIR}/third_party/llparse/http1/generated
-)
 target_link_libraries(fiber_lib PUBLIC boringssl::ssl boringssl::crypto)
-target_sources(fiber_lib PRIVATE
-    ${CMAKE_CURRENT_LIST_DIR}/third_party/llparse/http1/generated/llhttp.c
-    ${CMAKE_CURRENT_LIST_DIR}/third_party/llparse/http1/generated/http.c
-    ${CMAKE_CURRENT_LIST_DIR}/third_party/llparse/http1/generated/api.c
-)
 if (FIBER_USE_LIBCXX)
     target_link_options(fiber_lib INTERFACE ${FIBER_STDLIB_LINK_FLAGS})
 endif()

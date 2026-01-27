@@ -1,8 +1,8 @@
-# Http1 Server Design (llparse)
+# Http1 Server Design
 
 ## Goals
 - Provide coroutine-based HTTP/1.1 server with `HttpExchange` API.
-- Parse request line/headers with llparse-generated parser.
+- Parse request line/headers with a custom HTTP/1.x parser.
 - Support request bodies via `Content-Length` and `Transfer-Encoding: chunked`.
 - Support response bodies via `Content-Length` and chunked encoding.
 - Default keep-alive timeout: 70s, close on idle timeout.
@@ -132,17 +132,10 @@ public:
 - Because vectors allocate from `BufPool`, `HttpHeaders::release()` must be called before
   `BufPool::reset()` to avoid dangling pointers inside the vectors.
 
-## Parsing with llparse
-- Use llhttp (llparse-generated C) under `third_party/llparse/http1/generated/`.
-- `third_party/llparse/http1/grammar.js` tracks the HTTP/1 request grammar:
-  - request-line: `method SP target SP HTTP-version CRLF`
-  - headers: `field-name ":" OWS field-value CRLF`
-  - end-of-headers: `CRLF`
-- llparse callbacks capture spans for method/target/version/header name/value.
-- `Http1Parser` wraps generated C parser and exposes:
-  - `ParseResult parse(const char *data, size_t len, size_t &consumed)`
-  - `reset()` for next request
-  - parsed fields stored in `HttpExchange`.
+## Parsing
+- `Http1Parser` will host a custom HTTP/1.x parser (llhttp removed).
+- The parser should capture method/target/version/header name/value spans and
+  populate `HttpExchange` while enforcing size limits.
 
 ## Body Handling
 - If `Transfer-Encoding: chunked` is present, ignore `Content-Length` per RFC.
