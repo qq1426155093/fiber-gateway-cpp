@@ -12,8 +12,8 @@
 #include "../common/NonMovable.h"
 #include "../event/EventLoop.h"
 #include "HttpExchange.h"
-#include "Http1Parser.h"
 #include "HttpTransport.h"
+#include "Http1Parser.h"
 
 namespace fiber::http {
 
@@ -38,6 +38,17 @@ public:
                                                   bool end);
 
 private:
+    struct HeaderBuffer {
+        char *data = nullptr;
+        size_t cap = 0;
+        size_t size = 0;
+        size_t pos = 0;
+    };
+
+    static constexpr size_t kHeaderInitialSize = 8 * 1024;
+    static constexpr size_t kHeaderLargeSize = 32 * 1024;
+    static constexpr size_t kHeaderLargeMax = 4;
+
     common::IoResult<void> ensure_header_defaults(HttpExchange &exchange);
     fiber::async::Task<common::IoResult<void>> write_all(const void *data, size_t len);
     fiber::async::Task<common::IoResult<void>> send_continue_if_needed(HttpExchange &exchange);
@@ -47,17 +58,21 @@ private:
 
     fiber::async::Task<common::IoResult<size_t>> read_from_stream(std::chrono::seconds timeout);
     void consume_buffer(size_t len);
+    bool reset_header_buffer();
+    bool grow_header_buffer();
 
     std::unique_ptr<HttpTransport> transport_;
     HttpServerOptions options_{};
     HttpHandler handler_{};
+    mem::BufPool header_pool_;
     HttpExchange exchange_;
-    Http1Parser parser_{};
+    HeaderBuffer header_buffer_{};
+    size_t header_large_used_ = 0;
+    size_t header_bytes_ = 0;
 
     std::string recv_buffer_;
     size_t recv_offset_ = 0;
     bool closed_ = false;
-    bool parsing_body_ = false;
 };
 
 } // namespace fiber::http

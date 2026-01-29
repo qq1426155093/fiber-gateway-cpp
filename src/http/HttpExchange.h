@@ -15,6 +15,7 @@
 #include "../common/mem/BufPool.h"
 #include "../async/Task.h"
 #include "HttpHeaders.h"
+#include "Http1Parser.h"
 #include "TlsOptions.h"
 
 namespace fiber::http {
@@ -38,7 +39,7 @@ struct ReadBodyResult {
 };
 
 class Http1Connection;
-class Http1Parser;
+class BodyParser;
 
 class HttpExchange : public common::NonCopyable, public common::NonMovable {
 public:
@@ -68,18 +69,24 @@ public:
 
 private:
     friend class Http1Connection;
-    friend class Http1Parser;
+    friend class RequestLineParser;
+    friend class HeaderLineParser;
+    friend class BodyParser;
 
-    explicit HttpExchange(Http1Connection &connection, const HttpServerOptions &options);
+    explicit HttpExchange(Http1Connection &connection,
+                          const HttpServerOptions &options,
+                          mem::BufPool &header_pool);
     void reset();
 
     Http1Connection *connection_ = nullptr;
     const HttpServerOptions *options_ = nullptr;
+    mem::BufPool *header_pool_ = nullptr;
 
     std::string method_;
     std::string target_;
     std::string version_;
-    mem::BufPool pool_;
+    int request_http_major_ = 1;
+    int request_http_minor_ = 1;
     HttpHeaders request_headers_;
 
     bool request_chunked_ = false;
@@ -100,6 +107,8 @@ private:
     std::string body_buffer_;
     bool body_complete_ = false;
     bool continue_sent_ = false;
+
+    BodyParser body_parser_{};
 };
 
 using HttpHandler = std::function<fiber::async::Task<void>(HttpExchange &)>;

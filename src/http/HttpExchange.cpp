@@ -1,17 +1,17 @@
 #include "HttpExchange.h"
 
-#include <algorithm>
-
 #include "Http1Connection.h"
 
 namespace fiber::http {
 
-HttpExchange::HttpExchange(Http1Connection &connection, const HttpServerOptions &options)
+HttpExchange::HttpExchange(Http1Connection &connection,
+                           const HttpServerOptions &options,
+                           mem::BufPool &header_pool)
     : connection_(&connection),
       options_(&options),
-      pool_(std::max<size_t>(4096, options.max_header_bytes)),
-      request_headers_(pool_),
-      response_headers_(pool_) {
+      header_pool_(&header_pool),
+      request_headers_(header_pool),
+      response_headers_(header_pool) {
     request_headers_.reserve_bytes(options.max_header_bytes);
     response_headers_.reserve_bytes(options.max_header_bytes);
 }
@@ -20,6 +20,8 @@ void HttpExchange::reset() {
     method_.clear();
     target_.clear();
     version_.clear();
+    request_http_major_ = 1;
+    request_http_minor_ = 1;
     request_headers_.release();
     request_chunked_ = false;
     request_expect_continue_ = false;
@@ -36,7 +38,6 @@ void HttpExchange::reset() {
     response_content_length_ = 0;
     response_body_sent_ = 0;
 
-    pool_.reset();
     if (options_) {
         request_headers_.reserve_bytes(options_->max_header_bytes);
         response_headers_.reserve_bytes(options_->max_header_bytes);
@@ -45,6 +46,7 @@ void HttpExchange::reset() {
     body_buffer_.clear();
     body_complete_ = false;
     continue_sent_ = false;
+    body_parser_.reset();
 }
 
 std::string_view HttpExchange::method() const noexcept {
@@ -72,7 +74,7 @@ HttpHeaders &HttpExchange::response_headers() noexcept {
 }
 
 mem::BufPool &HttpExchange::pool() noexcept {
-    return pool_;
+    return *header_pool_;
 }
 
 bool HttpExchange::request_chunked() const noexcept {
