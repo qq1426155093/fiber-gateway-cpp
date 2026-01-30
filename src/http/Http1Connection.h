@@ -51,7 +51,6 @@ private:
 
     common::IoResult<void> ensure_header_defaults(HttpExchange &exchange);
     fiber::async::Task<common::IoResult<void>> write_all(const void *data, size_t len);
-    fiber::async::Task<common::IoResult<void>> send_continue_if_needed(HttpExchange &exchange);
     fiber::async::Task<common::IoResult<void>> drain_body(HttpExchange &exchange);
     common::IoResult<void> finalize_response_body(HttpExchange &exchange, bool end);
     static std::string default_reason(int status);

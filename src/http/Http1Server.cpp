@@ -19,19 +19,27 @@ namespace {
 
 int status_for_parse_error(HttpParseError error) {
     switch (error) {
-    case HttpParseError::HeadersTooLarge:
-        return 431;
-    case HttpParseError::BodyTooLarge:
-    case HttpParseError::ChunkTooLarge:
-        return 413;
-    case HttpParseError::UnsupportedTransferEncoding:
-        return 501;
-    case HttpParseError::BadRequest:
-    case HttpParseError::None:
-    default:
-        return 400;
+        case HttpParseError::HeadersTooLarge:
+            return 431;
+        case HttpParseError::BodyTooLarge:
+        case HttpParseError::ChunkTooLarge:
+            return 413;
+        case HttpParseError::UnsupportedTransferEncoding:
+            return 501;
+        case HttpParseError::BadRequest:
+        case HttpParseError::None:
+        default:
+            return 400;
     }
 }
+
+int http_major(HttpVersion version) { return static_cast<int>(version) / 1000; }
+
+int http_minor(HttpVersion version) { return static_cast<int>(version) % 1000; }
+
+bool is_http10(HttpVersion version) { return http_major(version) == 1 && http_minor(version) == 0; }
+
+bool is_http11_or_newer(HttpVersion version) { return http_major(version) == 1 && http_minor(version) >= 1; }
 
 fiber::async::DetachedTask run_connection(std::unique_ptr<Http1Connection> connection) {
     if (connection) {
@@ -42,15 +50,10 @@ fiber::async::DetachedTask run_connection(std::unique_ptr<Http1Connection> conne
 
 } // namespace
 
-Http1Connection::Http1Connection(std::unique_ptr<HttpTransport> transport,
-                                 const HttpServerOptions &options,
-                                 HttpHandler handler)
-    : transport_(std::move(transport)),
-      options_(options),
-      handler_(std::move(handler)),
-      header_pool_(std::max<size_t>(4096, options.max_header_bytes)),
-      exchange_(*this, options_, header_pool_) {
-}
+Http1Connection::Http1Connection(std::unique_ptr<HttpTransport> transport, const HttpServerOptions &options,
+                                 HttpHandler handler) :
+    transport_(std::move(transport)), options_(options), handler_(std::move(handler)),
+    header_pool_(std::max<size_t>(4096, options.max_header_bytes)), exchange_(*this, options_, header_pool_) {}
 
 fiber::async::Task<void> Http1Connection::run() {
     if (transport_) {
@@ -73,14 +76,13 @@ fiber::async::Task<void> Http1Connection::run() {
         recv_buffer_.clear();
         recv_offset_ = 0;
 
-        RequestLineParser request_parser;
-        HeaderLineParser header_parser;
+        RequestLineParser request_parser(exchange_, options_);
+        HeaderLineParser header_parser(exchange_, options_);
         bool request_line_done = false;
         bool headers_done = false;
         HttpParseError parse_error = HttpParseError::None;
 
-        std::chrono::seconds header_timeout =
-            first_request ? options_.header_timeout : options_.keep_alive_timeout;
+        std::chrono::seconds header_timeout = first_request ? options_.header_timeout : options_.keep_alive_timeout;
         first_request = false;
 
         while (!headers_done) {
@@ -93,21 +95,13 @@ fiber::async::Task<void> Http1Connection::run() {
                     }
                     bool carry_ok = false;
                     if (!request_line_done) {
-                        carry_ok = request_parser.carry_over(old_buffer.data,
-                                                             old_buffer.size,
-                                                             old_buffer.pos,
-                                                             header_buffer_.data,
-                                                             header_buffer_.cap,
-                                                             header_buffer_.size,
-                                                             header_buffer_.pos);
+                        carry_ok = request_parser.carry_over(old_buffer.data, old_buffer.size, old_buffer.pos,
+                                                             header_buffer_.data, header_buffer_.cap,
+                                                             header_buffer_.size, header_buffer_.pos);
                     } else {
-                        carry_ok = header_parser.carry_over(old_buffer.data,
-                                                            old_buffer.size,
-                                                            old_buffer.pos,
-                                                            header_buffer_.data,
-                                                            header_buffer_.cap,
-                                                            header_buffer_.size,
-                                                            header_buffer_.pos);
+                        carry_ok = header_parser.carry_over(old_buffer.data, old_buffer.size, old_buffer.pos,
+                                                            header_buffer_.data, header_buffer_.cap,
+                                                            header_buffer_.size, header_buffer_.pos);
                     }
                     if (!carry_ok) {
                         parse_error = HttpParseError::HeadersTooLarge;
@@ -115,9 +109,8 @@ fiber::async::Task<void> Http1Connection::run() {
                     }
                 }
                 size_t space = header_buffer_.cap - header_buffer_.size;
-                auto read_result = co_await transport_->read(header_buffer_.data + header_buffer_.size,
-                                                            space,
-                                                            header_timeout);
+                auto read_result =
+                        co_await transport_->read(header_buffer_.data + header_buffer_.size, space, header_timeout);
                 if (!read_result) {
                     closed_ = true;
                     transport_->close();
@@ -140,10 +133,12 @@ fiber::async::Task<void> Http1Connection::run() {
             size_t len = header_buffer_.size;
 
             if (!request_line_done) {
-                ParseCode rc = request_parser.execute(exchange_, options_, data, len, header_buffer_.pos);
+                ParseBuffer buffer{data, data + header_buffer_.pos, data + len};
+                ParseCode rc = request_parser.execute(&buffer);
+                header_buffer_.pos = static_cast<size_t>(buffer.pos - buffer.start);
                 if (rc == ParseCode::Ok) {
                     request_line_done = true;
-                    if (exchange_.request_http_major_ == 0 && exchange_.request_http_minor_ == 9) {
+                    if (exchange_.version_ == HttpVersion::HTTP_0_9) {
                         headers_done = true;
                     }
                     continue;
@@ -155,7 +150,9 @@ fiber::async::Task<void> Http1Connection::run() {
                 break;
             }
 
-            ParseCode rc = header_parser.execute(exchange_, options_, data, len, header_buffer_.pos);
+            ParseBuffer buffer{data, data + header_buffer_.pos, data + len};
+            ParseCode rc = header_parser.execute(&buffer);
+            header_buffer_.pos = static_cast<size_t>(buffer.pos - buffer.start);
             if (rc == ParseCode::HeaderDone) {
                 headers_done = true;
                 break;
@@ -171,31 +168,6 @@ fiber::async::Task<void> Http1Connection::run() {
             break;
         }
 
-        if (parse_error == HttpParseError::None && !(exchange_.request_http_major_ == 0 &&
-                                                     exchange_.request_http_minor_ == 9)) {
-            if (exchange_.request_http_major_ == 1 && exchange_.request_http_minor_ >= 1) {
-                exchange_.request_keep_alive_ = !header_parser.connection_close();
-            } else if (exchange_.request_http_major_ == 1 && exchange_.request_http_minor_ == 0) {
-                exchange_.request_keep_alive_ = header_parser.connection_keep_alive();
-            } else {
-                exchange_.request_keep_alive_ = false;
-            }
-
-            if (exchange_.request_chunked_) {
-                exchange_.request_content_length_ = 0;
-                exchange_.request_content_length_set_ = false;
-            }
-
-            if (exchange_.request_content_length_ > options_.max_body_bytes) {
-                parse_error = HttpParseError::BodyTooLarge;
-            }
-
-            if (!exchange_.request_chunked_ && (!exchange_.request_content_length_set_ ||
-                                                exchange_.request_content_length_ == 0)) {
-                exchange_.body_complete_ = true;
-            }
-        }
-
         if (parse_error != HttpParseError::None) {
             int status = status_for_parse_error(parse_error);
             exchange_.set_response_close();
@@ -208,14 +180,10 @@ fiber::async::Task<void> Http1Connection::run() {
         }
 
         if (header_buffer_.pos < header_buffer_.size) {
-            recv_buffer_.append(header_buffer_.data + header_buffer_.pos,
-                                header_buffer_.size - header_buffer_.pos);
+            recv_buffer_.append(header_buffer_.data + header_buffer_.pos, header_buffer_.size - header_buffer_.pos);
             recv_offset_ = 0;
         }
 
-        if (!exchange_.request_keep_alive_) {
-            exchange_.response_close_ = true;
-        }
 
         co_await handler_(exchange_);
 
@@ -223,17 +191,6 @@ fiber::async::Task<void> Http1Connection::run() {
             exchange_.set_response_close();
             exchange_.set_response_content_length(0);
             co_await send_response_header(exchange_, 500, "Internal Server Error");
-        }
-
-        if (!exchange_.body_complete_) {
-            if (options_.drain_unread_body) {
-                auto drain_result = co_await drain_body(exchange_);
-                if (!drain_result) {
-                    exchange_.response_close_ = true;
-                }
-            } else {
-                exchange_.response_close_ = true;
-            }
         }
 
         if (!exchange_.response_complete_) {
@@ -247,32 +204,20 @@ fiber::async::Task<void> Http1Connection::run() {
             }
         }
 
-        if (exchange_.response_close_ || !exchange_.request_keep_alive_) {
-            co_await transport_->shutdown(options_.write_timeout);
-            transport_->close();
-            closed_ = true;
-            co_return;
-        }
     }
     co_return;
 }
 
-fiber::async::Task<common::IoResult<ReadBodyResult>> Http1Connection::read_body(HttpExchange &exchange,
-                                                                      void *buf,
-                                                                      size_t len) {
-    if (exchange.body_complete_ && exchange.body_buffer_.empty()) {
+fiber::async::Task<common::IoResult<ReadBodyResult>> Http1Connection::read_body(HttpExchange &exchange, void *buf,
+                                                                                size_t len) {
+    if (  exchange.body_buffer_.empty()) {
         co_return ReadBodyResult{0, true};
     }
     if (!exchange.body_buffer_.empty()) {
         size_t to_copy = std::min(len, exchange.body_buffer_.size());
         std::memcpy(buf, exchange.body_buffer_.data(), to_copy);
         exchange.body_buffer_.erase(0, to_copy);
-        co_return ReadBodyResult{to_copy, exchange.body_complete_ && exchange.body_buffer_.empty()};
-    }
-
-    auto cont_result = co_await send_continue_if_needed(exchange);
-    if (!cont_result) {
-        co_return std::unexpected(cont_result.error());
+        co_return ReadBodyResult{to_copy,   exchange.body_buffer_.empty()};
     }
 
     for (;;) {
@@ -295,7 +240,7 @@ fiber::async::Task<common::IoResult<ReadBodyResult>> Http1Connection::read_body(
         if (parse_result.state == HttpParseState::Error) {
             co_return std::unexpected(common::IoErr::Invalid);
         }
-        if (!exchange.body_buffer_.empty() || exchange.body_complete_) {
+        if (!exchange.body_buffer_.empty()) {
             break;
         }
     }
@@ -304,10 +249,7 @@ fiber::async::Task<common::IoResult<ReadBodyResult>> Http1Connection::read_body(
         size_t to_copy = std::min(len, exchange.body_buffer_.size());
         std::memcpy(buf, exchange.body_buffer_.data(), to_copy);
         exchange.body_buffer_.erase(0, to_copy);
-        co_return ReadBodyResult{to_copy, exchange.body_complete_ && exchange.body_buffer_.empty()};
-    }
-    if (exchange.body_complete_) {
-        co_return ReadBodyResult{0, true};
+        co_return ReadBodyResult{to_copy, exchange.body_buffer_.empty()};
     }
     co_return ReadBodyResult{0, false};
 }
@@ -326,9 +268,8 @@ fiber::async::Task<common::IoResult<void>> Http1Connection::discard_body(HttpExc
     co_return common::IoResult<void>{};
 }
 
-fiber::async::Task<common::IoResult<void>> Http1Connection::send_response_header(HttpExchange &exchange,
-                                                                       int status,
-                                                                       std::string_view reason) {
+fiber::async::Task<common::IoResult<void>> Http1Connection::send_response_header(HttpExchange &exchange, int status,
+                                                                                 std::string_view reason) {
     if (exchange.response_header_sent_) {
         co_return std::unexpected(common::IoErr::Already);
     }
@@ -347,9 +288,10 @@ fiber::async::Task<common::IoResult<void>> Http1Connection::send_response_header
 
     std::string response;
     response.reserve(256 + exchange.response_headers_.size() * 32);
-    std::string_view version = exchange.version_.empty()
-        ? std::string_view("HTTP/1.1")
-        : std::string_view(exchange.version_);
+    std::string_view version = exchange.version();
+    if (version.empty()) {
+        version = "HTTP/1.1";
+    }
     response.append(version);
     response.push_back(' ');
     response.append(std::to_string(status));
@@ -357,11 +299,9 @@ fiber::async::Task<common::IoResult<void>> Http1Connection::send_response_header
     response.append(status_reason);
     response.append("\r\n");
 
-    auto has_header = [&](std::string_view name) {
-        return exchange.response_headers_.contains(name);
-    };
+    auto has_header = [&](std::string_view name) { return exchange.response_headers_.contains(name); };
 
-    for (const auto &header : exchange.response_headers_) {
+    for (const auto &header: exchange.response_headers_) {
         response.append(header.name_view());
         response.append(": ");
         response.append(header.value_view());
@@ -378,8 +318,7 @@ fiber::async::Task<common::IoResult<void>> Http1Connection::send_response_header
     }
     if (exchange.response_close_ && !has_header("connection")) {
         response.append("Connection: close\r\n");
-    } else if (!exchange.response_close_ && !has_header("connection") &&
-               exchange.version_ == "HTTP/1.0") {
+    } else if (!exchange.response_close_ && !has_header("connection") && is_http10(exchange.version_)) {
         response.append("Connection: keep-alive\r\n");
     }
 
@@ -393,10 +332,8 @@ fiber::async::Task<common::IoResult<void>> Http1Connection::send_response_header
     co_return common::IoResult<void>{};
 }
 
-fiber::async::Task<common::IoResult<size_t>> Http1Connection::write_body(HttpExchange &exchange,
-                                                               const void *buf,
-                                                               size_t len,
-                                                               bool end) {
+fiber::async::Task<common::IoResult<size_t>> Http1Connection::write_body(HttpExchange &exchange, const void *buf,
+                                                                         size_t len, bool end) {
     if (!exchange.response_header_sent_) {
         co_return std::unexpected(common::IoErr::Invalid);
     }
@@ -407,10 +344,7 @@ fiber::async::Task<common::IoResult<size_t>> Http1Connection::write_body(HttpExc
     if (exchange.response_chunked_) {
         if (len > 0) {
             std::array<char, 32> chunk_header{};
-            auto [ptr, ec] = std::to_chars(chunk_header.data(),
-                                           chunk_header.data() + chunk_header.size(),
-                                           len,
-                                           16);
+            auto [ptr, ec] = std::to_chars(chunk_header.data(), chunk_header.data() + chunk_header.size(), len, 16);
             if (ec != std::errc()) {
                 co_return std::unexpected(common::IoErr::Invalid);
             }
@@ -464,7 +398,7 @@ common::IoResult<void> Http1Connection::ensure_header_defaults(HttpExchange &exc
         return std::unexpected(common::IoErr::Invalid);
     }
     if (!exchange.response_chunked_ && !exchange.response_content_length_set_) {
-        if (exchange.version_ == "HTTP/1.0") {
+        if (is_http10(exchange.version_)) {
             exchange.response_close_ = true;
         } else {
             exchange.response_chunked_ = true;
@@ -487,19 +421,6 @@ fiber::async::Task<common::IoResult<void>> Http1Connection::write_all(const void
         ptr += *result;
         remaining -= *result;
     }
-    co_return common::IoResult<void>{};
-}
-
-fiber::async::Task<common::IoResult<void>> Http1Connection::send_continue_if_needed(HttpExchange &exchange) {
-    if (!exchange.request_expect_continue_ || exchange.continue_sent_ ||
-        !options_.auto_100_continue) {
-        co_return common::IoResult<void>{};
-    }
-    auto result = co_await write_all("HTTP/1.1 100 Continue\r\n\r\n", 25);
-    if (!result) {
-        co_return std::unexpected(result.error());
-    }
-    exchange.continue_sent_ = true;
     co_return common::IoResult<void>{};
 }
 
@@ -529,26 +450,26 @@ common::IoResult<void> Http1Connection::finalize_response_body(HttpExchange &exc
 
 std::string Http1Connection::default_reason(int status) {
     switch (status) {
-    case 200:
-        return "OK";
-    case 201:
-        return "Created";
-    case 204:
-        return "No Content";
-    case 400:
-        return "Bad Request";
-    case 404:
-        return "Not Found";
-    case 413:
-        return "Payload Too Large";
-    case 431:
-        return "Request Header Fields Too Large";
-    case 500:
-        return "Internal Server Error";
-    case 501:
-        return "Not Implemented";
-    default:
-        return "OK";
+        case 200:
+            return "OK";
+        case 201:
+            return "Created";
+        case 204:
+            return "No Content";
+        case 400:
+            return "Bad Request";
+        case 404:
+            return "Not Found";
+        case 413:
+            return "Payload Too Large";
+        case 431:
+            return "Request Header Fields Too Large";
+        case 500:
+            return "Internal Server Error";
+        case 501:
+            return "Not Implemented";
+        default:
+            return "OK";
     }
 }
 
@@ -607,20 +528,12 @@ void Http1Connection::consume_buffer(size_t len) {
     }
 }
 
-Http1Server::Http1Server(event::EventLoop &loop,
-                         HttpHandler handler,
-                         HttpServerOptions options)
-    : loop_(loop),
-      listener_(loop),
-      handler_(std::move(handler)),
-      options_(options) {
-}
+Http1Server::Http1Server(event::EventLoop &loop, HttpHandler handler, HttpServerOptions options) :
+    loop_(loop), listener_(loop), handler_(std::move(handler)), options_(options) {}
 
-Http1Server::~Http1Server() {
-}
+Http1Server::~Http1Server() {}
 
-common::IoResult<void> Http1Server::bind(const net::SocketAddress &addr,
-                                         const net::ListenOptions &options) {
+common::IoResult<void> Http1Server::bind(const net::SocketAddress &addr, const net::ListenOptions &options) {
     if (options_.tls.enabled) {
         if (!tls_context_) {
             tls_context_ = std::make_unique<TlsContext>(options_.tls);
@@ -633,17 +546,11 @@ common::IoResult<void> Http1Server::bind(const net::SocketAddress &addr,
     return listener_.bind(addr, options);
 }
 
-bool Http1Server::valid() const noexcept {
-    return listener_.valid();
-}
+bool Http1Server::valid() const noexcept { return listener_.valid(); }
 
-int Http1Server::fd() const noexcept {
-    return listener_.fd();
-}
+int Http1Server::fd() const noexcept { return listener_.fd(); }
 
-void Http1Server::close() {
-    listener_.close();
-}
+void Http1Server::close() { listener_.close(); }
 
 fiber::async::DetachedTask Http1Server::serve() {
     for (;;) {
@@ -658,9 +565,7 @@ fiber::async::DetachedTask Http1Server::serve() {
         if (accept_result->fd < 0) {
             continue;
         }
-        auto stream = std::make_unique<net::TcpStream>(loop_,
-                                                       accept_result->fd,
-                                                       accept_result->peer);
+        auto stream = std::make_unique<net::TcpStream>(loop_, accept_result->fd, accept_result->peer);
         std::unique_ptr<HttpTransport> transport;
         if (options_.tls.enabled) {
             if (!tls_context_) {
@@ -676,9 +581,7 @@ fiber::async::DetachedTask Http1Server::serve() {
             transport = std::make_unique<TcpTransport>(std::move(stream));
         }
 
-        auto connection = std::make_unique<Http1Connection>(std::move(transport),
-                                                            options_,
-                                                            handler_);
+        auto connection = std::make_unique<Http1Connection>(std::move(transport), options_, handler_);
         fiber::async::spawn(loop_, [connection = std::move(connection)]() mutable {
             return run_connection(std::move(connection));
         });

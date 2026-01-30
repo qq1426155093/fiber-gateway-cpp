@@ -8,6 +8,7 @@
 
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
+#include "HttpCommon.h"
 
 namespace fiber::http {
 
@@ -49,17 +50,19 @@ enum class ParseCode : int {
     HeaderDone = -15,
 };
 
+struct ParseBuffer {
+    const char *start = nullptr;
+    const char *pos = nullptr;
+    const char *last = nullptr;
+};
+
 class RequestLineParser : public common::NonCopyable, public common::NonMovable {
 public:
-    RequestLineParser();
+    RequestLineParser(HttpExchange &exchange, const HttpServerOptions &options);
 
     void reset();
 
-    ParseCode execute(HttpExchange &exchange,
-                      const HttpServerOptions &options,
-                      const char *data,
-                      size_t len,
-                      size_t &offset);
+    ParseCode execute(ParseBuffer *buffer);
     bool carry_over(const char *data,
                     size_t size,
                     size_t pos,
@@ -114,7 +117,7 @@ public:
         int http_major = 0;
         int http_minor = 0;
         int http_version = 0;
-        bool method_is_get = false;
+        HttpMethod method = HttpMethod::Unknown;
         bool complex_uri = false;
         bool quoted_uri = false;
         bool plus_in_uri = false;
@@ -125,21 +128,19 @@ public:
 private:
     static constexpr size_t kInvalidPos = std::numeric_limits<size_t>::max();
 
+    HttpExchange *exchange_ = nullptr;
+    const HttpServerOptions *options_ = nullptr;
     State state_ = State::Start;
     RequestLineState line_{};
 };
 
 class HeaderLineParser : public common::NonCopyable, public common::NonMovable {
 public:
-    HeaderLineParser();
+    HeaderLineParser(HttpExchange &exchange, const HttpServerOptions &options);
 
     void reset();
 
-    ParseCode execute(HttpExchange &exchange,
-                      const HttpServerOptions &options,
-                      const char *data,
-                      size_t len,
-                      size_t &offset);
+    ParseCode execute(ParseBuffer *buffer);
     bool carry_over(const char *data,
                     size_t size,
                     size_t pos,
@@ -179,6 +180,8 @@ public:
 private:
     static constexpr size_t kInvalidPos = std::numeric_limits<size_t>::max();
 
+    HttpExchange *exchange_ = nullptr;
+    const HttpServerOptions *options_ = nullptr;
     State state_ = State::Start;
     HeaderLineState line_{};
     bool connection_close_ = false;

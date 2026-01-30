@@ -16,18 +16,13 @@ constexpr size_t kMaxOffT = std::numeric_limits<size_t>::max();
 constexpr size_t kInvalidPos = std::numeric_limits<size_t>::max();
 
 static const uint32_t usual[] = {
-    0x00000000,
-    0x7fff37d6,
+        0x00000000, 0x7fff37d6,
 #if defined(_WIN32)
-    0xefffffff,
+        0xefffffff,
 #else
-    0xffffffff,
+        0xffffffff,
 #endif
-    0x7fffffff,
-    0xffffffff,
-    0xffffffff,
-    0xffffffff,
-    0xffffffff,
+        0x7fffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff,
 };
 
 constexpr uint64_t pack_u64(char c0, char c1, char c2, char c3, char c4, char c5, char c6, char c7) {
@@ -68,9 +63,7 @@ inline bool str3_cmp(const char *m, char c0, char c1, char c2, char) {
     return load_u32_le(m, 3) == pack_u32(c0, c1, c2, 0);
 }
 
-inline bool str3Ocmp(const char *m, char c0, char, char c2, char c3) {
-    return m[0] == c0 && m[2] == c2 && m[3] == c3;
-}
+inline bool str3Ocmp(const char *m, char c0, char, char c2, char c3) { return m[0] == c0 && m[2] == c2 && m[3] == c3; }
 
 inline bool str4cmp(const char *m, char c0, char c1, char c2, char c3) {
     return load_u32_le(m, 4) == pack_u32(c0, c1, c2, c3);
@@ -97,9 +90,7 @@ inline bool str9cmp(const char *m, char c0, char c1, char c2, char c3, char c4, 
            static_cast<unsigned char>(m[8]) == static_cast<unsigned char>(c8);
 }
 
-inline uint32_t ngx_hash(uint32_t key, unsigned char c) {
-    return key * 31u + static_cast<uint32_t>(c);
-}
+inline uint32_t ngx_hash(uint32_t key, unsigned char c) { return key * 31u + static_cast<uint32_t>(c); }
 
 constexpr uint32_t ngx_hash_lower(const char *s, size_t n) {
     uint32_t h = 0;
@@ -179,19 +170,9 @@ bool parse_transfer_encoding(std::string_view value, bool &chunked) {
     }
 }
 
-struct ParseBuffer {
-    const char *start = nullptr;
-    const char *pos = nullptr;
-    const char *last = nullptr;
-};
+size_t buffer_offset(const ParseBuffer &buffer, const char *p) { return static_cast<size_t>(p - buffer.start); }
 
-size_t buffer_offset(const ParseBuffer &buffer, const char *p) {
-    return static_cast<size_t>(p - buffer.start);
-}
-
-ParseCode parse_request_line(RequestLineParser::RequestLineState &r,
-                             RequestLineParser::State &state,
-                             ParseBuffer &b) {
+ParseCode parse_request_line(RequestLineParser::RequestLineState &r, RequestLineParser::State &state, ParseBuffer &b) {
     unsigned char c = 0;
     unsigned char ch = 0;
     const char *p = nullptr;
@@ -202,545 +183,562 @@ ParseCode parse_request_line(RequestLineParser::RequestLineState &r,
 
         switch (state) {
 
-        case RequestLineParser::State::Start:
-            r.request_start = buffer_offset(b, p);
+            case RequestLineParser::State::Start:
+                r.request_start = buffer_offset(b, p);
 
-            if (ch == '\r' || ch == '\n') {
-                break;
-            }
-
-            if ((ch < 'A' || ch > 'Z') && ch != '_' && ch != '-') {
-                return ParseCode::InvalidMethod;
-            }
-
-            state = RequestLineParser::State::Method;
-            break;
-
-        case RequestLineParser::State::Method:
-            if (ch == ' ') {
-                r.method_end = buffer_offset(b, p) - 1;
-                m = b.start + r.request_start;
-
-                switch (p - m) {
-                case 3:
-                    if (str3_cmp(m, 'G', 'E', 'T', ' ')) {
-                        r.method_is_get = true;
-                        break;
-                    }
-                    if (str3_cmp(m, 'P', 'U', 'T', ' ')) {
-                        break;
-                    }
-                    break;
-                case 4:
-                    if (m[1] == 'O') {
-                        if (str3Ocmp(m, 'P', 'O', 'S', 'T')) {
-                            break;
-                        }
-                        if (str3Ocmp(m, 'C', 'O', 'P', 'Y')) {
-                            break;
-                        }
-                        if (str3Ocmp(m, 'M', 'O', 'V', 'E')) {
-                            break;
-                        }
-                        if (str3Ocmp(m, 'L', 'O', 'C', 'K')) {
-                            break;
-                        }
-                    } else {
-                        if (str4cmp(m, 'H', 'E', 'A', 'D')) {
-                            break;
-                        }
-                    }
-                    break;
-                case 5:
-                    if (str5cmp(m, 'M', 'K', 'C', 'O', 'L')) {
-                        break;
-                    }
-                    if (str5cmp(m, 'P', 'A', 'T', 'C', 'H')) {
-                        break;
-                    }
-                    if (str5cmp(m, 'T', 'R', 'A', 'C', 'E')) {
-                        break;
-                    }
-                    break;
-                case 6:
-                    if (str6cmp(m, 'D', 'E', 'L', 'E', 'T', 'E')) {
-                        break;
-                    }
-                    if (str6cmp(m, 'U', 'N', 'L', 'O', 'C', 'K')) {
-                        break;
-                    }
-                    break;
-                case 7:
-                    if (str7cmp(m, 'O', 'P', 'T', 'I', 'O', 'N', 'S')) {
-                        break;
-                    }
-                    if (str7cmp(m, 'C', 'O', 'N', 'N', 'E', 'C', 'T')) {
-                        break;
-                    }
-                    break;
-                case 8:
-                    if (str8cmp(m, 'P', 'R', 'O', 'P', 'F', 'I', 'N', 'D')) {
-                        break;
-                    }
-                    break;
-                case 9:
-                    if (str9cmp(m, 'P', 'R', 'O', 'P', 'P', 'A', 'T', 'C', 'H')) {
-                        break;
-                    }
+                if (ch == '\r' || ch == '\n') {
                     break;
                 }
 
-                state = RequestLineParser::State::SpacesBeforeUri;
-                break;
-            }
-
-            if ((ch < 'A' || ch > 'Z') && ch != '_' && ch != '-') {
-                return ParseCode::InvalidMethod;
-            }
-
-            break;
-
-        case RequestLineParser::State::SpacesBeforeUri:
-            if (ch == '/') {
-                r.uri_start = buffer_offset(b, p);
-                state = RequestLineParser::State::AfterSlashInUri;
-                break;
-            }
-
-            c = static_cast<unsigned char>(ch | 0x20u);
-            if (c >= 'a' && c <= 'z') {
-                r.schema_start = buffer_offset(b, p);
-                state = RequestLineParser::State::Schema;
-                break;
-            }
-
-            switch (ch) {
-            case ' ':
-                break;
-            default:
-                return ParseCode::InvalidRequest;
-            }
-            break;
-
-        case RequestLineParser::State::Schema:
-            c = static_cast<unsigned char>(ch | 0x20u);
-            if (c >= 'a' && c <= 'z') {
-                break;
-            }
-            if ((ch >= '0' && ch <= '9') || ch == '+' || ch == '-' || ch == '.') {
-                break;
-            }
-            switch (ch) {
-            case ':':
-                r.schema_end = buffer_offset(b, p);
-                state = RequestLineParser::State::SchemaSlash;
-                break;
-            default:
-                return ParseCode::InvalidRequest;
-            }
-            break;
-
-        case RequestLineParser::State::SchemaSlash:
-            switch (ch) {
-            case '/':
-                state = RequestLineParser::State::SchemaSlashSlash;
-                break;
-            default:
-                return ParseCode::InvalidRequest;
-            }
-            break;
-
-        case RequestLineParser::State::SchemaSlashSlash:
-            switch (ch) {
-            case '/':
-                state = RequestLineParser::State::HostStart;
-                break;
-            default:
-                return ParseCode::InvalidRequest;
-            }
-            break;
-
-        case RequestLineParser::State::HostStart:
-            r.host_start = buffer_offset(b, p);
-            if (ch == '[') {
-                state = RequestLineParser::State::HostIpLiteral;
-                break;
-            }
-            state = RequestLineParser::State::Host;
-            [[fallthrough]];
-
-        case RequestLineParser::State::Host:
-            c = static_cast<unsigned char>(ch | 0x20u);
-            if (c >= 'a' && c <= 'z') {
-                break;
-            }
-            if ((ch >= '0' && ch <= '9') || ch == '.' || ch == '-') {
-                break;
-            }
-            [[fallthrough]];
-
-        case RequestLineParser::State::HostEnd:
-            r.host_end = buffer_offset(b, p);
-            switch (ch) {
-            case ':':
-                state = RequestLineParser::State::Port;
-                break;
-            case '/':
-                r.uri_start = buffer_offset(b, p);
-                state = RequestLineParser::State::AfterSlashInUri;
-                break;
-            case '?':
-                r.uri_start = buffer_offset(b, p);
-                r.args_start = buffer_offset(b, p) + 1;
-                r.empty_path_in_uri = true;
-                state = RequestLineParser::State::Uri;
-                break;
-            case ' ':
-                if (r.schema_end != kInvalidPos) {
-                    r.uri_start = r.schema_end + 1;
-                    r.uri_end = r.schema_end + 2;
+                if ((ch < 'A' || ch > 'Z') && ch != '_' && ch != '-') {
+                    return ParseCode::InvalidMethod;
                 }
-                state = RequestLineParser::State::Http09;
-                break;
-            default:
-                return ParseCode::InvalidRequest;
-            }
-            break;
 
-        case RequestLineParser::State::HostIpLiteral:
-            if (ch >= '0' && ch <= '9') {
+                state = RequestLineParser::State::Method;
                 break;
-            }
-            c = static_cast<unsigned char>(ch | 0x20u);
-            if (c >= 'a' && c <= 'z') {
-                break;
-            }
-            switch (ch) {
-            case ':':
-                break;
-            case ']':
-                state = RequestLineParser::State::HostEnd;
-                break;
-            case '-':
-            case '.':
-            case '_':
-            case '~':
-                break;
-            case '!':
-            case '$':
-            case '&':
-            case '\'':
-            case '(':
-            case ')':
-            case '*':
-            case '+':
-            case ',':
-            case ';':
-            case '=':
-                break;
-            default:
-                return ParseCode::InvalidRequest;
-            }
-            break;
 
-        case RequestLineParser::State::Port:
-            if (ch >= '0' && ch <= '9') {
-                break;
-            }
-            switch (ch) {
-            case '/':
-                r.uri_start = buffer_offset(b, p);
-                state = RequestLineParser::State::AfterSlashInUri;
-                break;
-            case '?':
-                r.uri_start = buffer_offset(b, p);
-                r.args_start = buffer_offset(b, p) + 1;
-                r.empty_path_in_uri = true;
-                state = RequestLineParser::State::Uri;
-                break;
-            case ' ':
-                if (r.schema_end != kInvalidPos) {
-                    r.uri_start = r.schema_end + 1;
-                    r.uri_end = r.schema_end + 2;
+            case RequestLineParser::State::Method:
+                if (ch == ' ') {
+                    r.method_end = buffer_offset(b, p) - 1;
+                    m = b.start + r.request_start;
+
+                    switch (p - m) {
+                        case 3:
+                            if (str3_cmp(m, 'G', 'E', 'T', ' ')) {
+                                r.method = HttpMethod::Get;
+                                break;
+                            }
+                            if (str3_cmp(m, 'P', 'U', 'T', ' ')) {
+                                r.method = HttpMethod::Put;
+                                break;
+                            }
+                            break;
+                        case 4:
+                            if (m[1] == 'O') {
+                                if (str3Ocmp(m, 'P', 'O', 'S', 'T')) {
+                                    r.method = HttpMethod::Post;
+                                    break;
+                                }
+                                if (str3Ocmp(m, 'C', 'O', 'P', 'Y')) {
+                                    r.method = HttpMethod::Copy;
+                                    break;
+                                }
+                                if (str3Ocmp(m, 'M', 'O', 'V', 'E')) {
+                                    r.method = HttpMethod::Move;
+                                    break;
+                                }
+                                if (str3Ocmp(m, 'L', 'O', 'C', 'K')) {
+                                    r.method = HttpMethod::Lock;
+                                    break;
+                                }
+                            } else {
+                                if (str4cmp(m, 'H', 'E', 'A', 'D')) {
+                                    r.method = HttpMethod::Head;
+                                    break;
+                                }
+                            }
+                            break;
+                        case 5:
+                            if (str5cmp(m, 'M', 'K', 'C', 'O', 'L')) {
+                                r.method = HttpMethod::MKCOL;
+                                break;
+                            }
+                            if (str5cmp(m, 'P', 'A', 'T', 'C', 'H')) {
+                                r.method = HttpMethod::Patch;
+                                break;
+                            }
+                            if (str5cmp(m, 'T', 'R', 'A', 'C', 'E')) {
+                                r.method = HttpMethod::Trace;
+                                break;
+                            }
+                            break;
+                        case 6:
+                            if (str6cmp(m, 'D', 'E', 'L', 'E', 'T', 'E')) {
+                                r.method = HttpMethod::Delete;
+                                break;
+                            }
+                            if (str6cmp(m, 'U', 'N', 'L', 'O', 'C', 'K')) {
+                                r.method = HttpMethod::Unlock;
+
+                                break;
+                            }
+                            break;
+                        case 7:
+                            if (str7cmp(m, 'O', 'P', 'T', 'I', 'O', 'N', 'S')) {
+                                r.method = HttpMethod::Options;
+                                break;
+                            }
+                            if (str7cmp(m, 'C', 'O', 'N', 'N', 'E', 'C', 'T')) {
+                                r.method = HttpMethod::Connect;
+                                break;
+                            }
+                            break;
+                        case 8:
+                            if (str8cmp(m, 'P', 'R', 'O', 'P', 'F', 'I', 'N', 'D')) {
+                                r.method = HttpMethod::PropFind;
+                                break;
+                            }
+                            break;
+                        case 9:
+                            if (str9cmp(m, 'P', 'R', 'O', 'P', 'P', 'A', 'T', 'C', 'H')) {
+                                r.method = HttpMethod::PropPatch;
+                                break;
+                            }
+                            break;
+                    }
+
+                    state = RequestLineParser::State::SpacesBeforeUri;
+                    break;
                 }
-                state = RequestLineParser::State::Http09;
-                break;
-            default:
-                return ParseCode::InvalidRequest;
-            }
-            break;
 
-        case RequestLineParser::State::AfterSlashInUri:
-            if (usual[ch >> 5] & (1U << (ch & 0x1f))) {
-                state = RequestLineParser::State::CheckUri;
+                if ((ch < 'A' || ch > 'Z') && ch != '_' && ch != '-') {
+                    return ParseCode::InvalidMethod;
+                }
+
                 break;
-            }
-            switch (ch) {
-            case ' ':
-                r.uri_end = buffer_offset(b, p);
-                state = RequestLineParser::State::Http09;
+
+            case RequestLineParser::State::SpacesBeforeUri:
+                if (ch == '/') {
+                    r.uri_start = buffer_offset(b, p);
+                    state = RequestLineParser::State::AfterSlashInUri;
+                    break;
+                }
+
+                c = static_cast<unsigned char>(ch | 0x20u);
+                if (c >= 'a' && c <= 'z') {
+                    r.schema_start = buffer_offset(b, p);
+                    state = RequestLineParser::State::Schema;
+                    break;
+                }
+
+                switch (ch) {
+                    case ' ':
+                        break;
+                    default:
+                        return ParseCode::InvalidRequest;
+                }
                 break;
-            case '\r':
-                r.uri_end = buffer_offset(b, p);
-                r.http_minor = 9;
-                state = RequestLineParser::State::AlmostDone;
+
+            case RequestLineParser::State::Schema:
+                c = static_cast<unsigned char>(ch | 0x20u);
+                if (c >= 'a' && c <= 'z') {
+                    break;
+                }
+                if ((ch >= '0' && ch <= '9') || ch == '+' || ch == '-' || ch == '.') {
+                    break;
+                }
+                switch (ch) {
+                    case ':':
+                        r.schema_end = buffer_offset(b, p);
+                        state = RequestLineParser::State::SchemaSlash;
+                        break;
+                    default:
+                        return ParseCode::InvalidRequest;
+                }
                 break;
-            case '\n':
-                r.uri_end = buffer_offset(b, p);
-                r.http_minor = 9;
-                goto done;
-            case '.':
-                r.complex_uri = true;
-                state = RequestLineParser::State::Uri;
+
+            case RequestLineParser::State::SchemaSlash:
+                switch (ch) {
+                    case '/':
+                        state = RequestLineParser::State::SchemaSlashSlash;
+                        break;
+                    default:
+                        return ParseCode::InvalidRequest;
+                }
                 break;
-            case '%':
-                r.quoted_uri = true;
-                state = RequestLineParser::State::Uri;
+
+            case RequestLineParser::State::SchemaSlashSlash:
+                switch (ch) {
+                    case '/':
+                        state = RequestLineParser::State::HostStart;
+                        break;
+                    default:
+                        return ParseCode::InvalidRequest;
+                }
                 break;
-            case '/':
-                r.complex_uri = true;
-                state = RequestLineParser::State::Uri;
+
+            case RequestLineParser::State::HostStart:
+                r.host_start = buffer_offset(b, p);
+                if (ch == '[') {
+                    state = RequestLineParser::State::HostIpLiteral;
+                    break;
+                }
+                state = RequestLineParser::State::Host;
+                [[fallthrough]];
+
+            case RequestLineParser::State::Host:
+                c = static_cast<unsigned char>(ch | 0x20u);
+                if (c >= 'a' && c <= 'z') {
+                    break;
+                }
+                if ((ch >= '0' && ch <= '9') || ch == '.' || ch == '-') {
+                    break;
+                }
+                [[fallthrough]];
+
+            case RequestLineParser::State::HostEnd:
+                r.host_end = buffer_offset(b, p);
+                switch (ch) {
+                    case ':':
+                        state = RequestLineParser::State::Port;
+                        break;
+                    case '/':
+                        r.uri_start = buffer_offset(b, p);
+                        state = RequestLineParser::State::AfterSlashInUri;
+                        break;
+                    case '?':
+                        r.uri_start = buffer_offset(b, p);
+                        r.args_start = buffer_offset(b, p) + 1;
+                        r.empty_path_in_uri = true;
+                        state = RequestLineParser::State::Uri;
+                        break;
+                    case ' ':
+                        if (r.schema_end != kInvalidPos) {
+                            r.uri_start = r.schema_end + 1;
+                            r.uri_end = r.schema_end + 2;
+                        }
+                        state = RequestLineParser::State::Http09;
+                        break;
+                    default:
+                        return ParseCode::InvalidRequest;
+                }
                 break;
+
+            case RequestLineParser::State::HostIpLiteral:
+                if (ch >= '0' && ch <= '9') {
+                    break;
+                }
+                c = static_cast<unsigned char>(ch | 0x20u);
+                if (c >= 'a' && c <= 'z') {
+                    break;
+                }
+                switch (ch) {
+                    case ':':
+                        break;
+                    case ']':
+                        state = RequestLineParser::State::HostEnd;
+                        break;
+                    case '-':
+                    case '.':
+                    case '_':
+                    case '~':
+                        break;
+                    case '!':
+                    case '$':
+                    case '&':
+                    case '\'':
+                    case '(':
+                    case ')':
+                    case '*':
+                    case '+':
+                    case ',':
+                    case ';':
+                    case '=':
+                        break;
+                    default:
+                        return ParseCode::InvalidRequest;
+                }
+                break;
+
+            case RequestLineParser::State::Port:
+                if (ch >= '0' && ch <= '9') {
+                    break;
+                }
+                switch (ch) {
+                    case '/':
+                        r.uri_start = buffer_offset(b, p);
+                        state = RequestLineParser::State::AfterSlashInUri;
+                        break;
+                    case '?':
+                        r.uri_start = buffer_offset(b, p);
+                        r.args_start = buffer_offset(b, p) + 1;
+                        r.empty_path_in_uri = true;
+                        state = RequestLineParser::State::Uri;
+                        break;
+                    case ' ':
+                        if (r.schema_end != kInvalidPos) {
+                            r.uri_start = r.schema_end + 1;
+                            r.uri_end = r.schema_end + 2;
+                        }
+                        state = RequestLineParser::State::Http09;
+                        break;
+                    default:
+                        return ParseCode::InvalidRequest;
+                }
+                break;
+
+            case RequestLineParser::State::AfterSlashInUri:
+                if (usual[ch >> 5] & (1U << (ch & 0x1f))) {
+                    state = RequestLineParser::State::CheckUri;
+                    break;
+                }
+                switch (ch) {
+                    case ' ':
+                        r.uri_end = buffer_offset(b, p);
+                        state = RequestLineParser::State::Http09;
+                        break;
+                    case '\r':
+                        r.uri_end = buffer_offset(b, p);
+                        r.http_minor = 9;
+                        state = RequestLineParser::State::AlmostDone;
+                        break;
+                    case '\n':
+                        r.uri_end = buffer_offset(b, p);
+                        r.http_minor = 9;
+                        goto done;
+                    case '.':
+                        r.complex_uri = true;
+                        state = RequestLineParser::State::Uri;
+                        break;
+                    case '%':
+                        r.quoted_uri = true;
+                        state = RequestLineParser::State::Uri;
+                        break;
+                    case '/':
+                        r.complex_uri = true;
+                        state = RequestLineParser::State::Uri;
+                        break;
 #if defined(_WIN32)
-            case '\\':
-                r.complex_uri = true;
-                state = RequestLineParser::State::Uri;
-                break;
+                    case '\\':
+                        r.complex_uri = true;
+                        state = RequestLineParser::State::Uri;
+                        break;
 #endif
-            case '?':
-                r.args_start = buffer_offset(b, p) + 1;
-                state = RequestLineParser::State::Uri;
-                break;
-            case '#':
-                r.complex_uri = true;
-                state = RequestLineParser::State::Uri;
-                break;
-            case '+':
-                r.plus_in_uri = true;
-                break;
-            default:
-                if (ch < 0x20 || ch == 0x7f) {
-                    return ParseCode::InvalidRequest;
+                    case '?':
+                        r.args_start = buffer_offset(b, p) + 1;
+                        state = RequestLineParser::State::Uri;
+                        break;
+                    case '#':
+                        r.complex_uri = true;
+                        state = RequestLineParser::State::Uri;
+                        break;
+                    case '+':
+                        r.plus_in_uri = true;
+                        break;
+                    default:
+                        if (ch < 0x20 || ch == 0x7f) {
+                            return ParseCode::InvalidRequest;
+                        }
+                        state = RequestLineParser::State::CheckUri;
+                        break;
                 }
-                state = RequestLineParser::State::CheckUri;
                 break;
-            }
-            break;
 
-        case RequestLineParser::State::CheckUri:
-            if (usual[ch >> 5] & (1U << (ch & 0x1f))) {
-                break;
-            }
-            switch (ch) {
-            case '/':
-#if defined(_WIN32)
-                if (r.uri_ext != kInvalidPos && r.uri_ext == buffer_offset(b, p)) {
-                    r.complex_uri = true;
-                    state = RequestLineParser::State::Uri;
+            case RequestLineParser::State::CheckUri:
+                if (usual[ch >> 5] & (1U << (ch & 0x1f))) {
                     break;
                 }
+                switch (ch) {
+                    case '/':
+#if defined(_WIN32)
+                        if (r.uri_ext != kInvalidPos && r.uri_ext == buffer_offset(b, p)) {
+                            r.complex_uri = true;
+                            state = RequestLineParser::State::Uri;
+                            break;
+                        }
 #endif
-                r.uri_ext = kInvalidPos;
-                state = RequestLineParser::State::AfterSlashInUri;
-                break;
-            case '.':
-                r.uri_ext = buffer_offset(b, p) + 1;
-                break;
-            case ' ':
-                r.uri_end = buffer_offset(b, p);
-                state = RequestLineParser::State::Http09;
-                break;
-            case '\r':
-                r.uri_end = buffer_offset(b, p);
-                r.http_minor = 9;
-                state = RequestLineParser::State::AlmostDone;
-                break;
-            case '\n':
-                r.uri_end = buffer_offset(b, p);
-                r.http_minor = 9;
-                goto done;
-            case '%':
-                r.quoted_uri = true;
-                state = RequestLineParser::State::Uri;
-                break;
-            case '?':
-                r.args_start = buffer_offset(b, p) + 1;
-                state = RequestLineParser::State::Uri;
-                break;
-            case '#':
-                r.complex_uri = true;
-                state = RequestLineParser::State::Uri;
-                break;
-            case '+':
-                r.plus_in_uri = true;
-                break;
-            case '\0':
-                return ParseCode::InvalidRequest;
-            default:
-                if (ch < 0x20 || ch == 0x7f) {
-                    return ParseCode::InvalidRequest;
-                }
-                state = RequestLineParser::State::Uri;
-                break;
-            }
-            break;
-
-        case RequestLineParser::State::Uri:
-            if (usual[ch >> 5] & (1U << (ch & 0x1f))) {
-                break;
-            }
-            switch (ch) {
-            case ' ':
-                r.uri_end = buffer_offset(b, p);
-                state = RequestLineParser::State::Http09;
-                break;
-            case '\r':
-                r.uri_end = buffer_offset(b, p);
-                r.http_minor = 9;
-                state = RequestLineParser::State::AlmostDone;
-                break;
-            case '\n':
-                r.uri_end = buffer_offset(b, p);
-                r.http_minor = 9;
-                goto done;
-            case '%':
-                r.quoted_uri = true;
-                break;
-            case '#':
-                r.complex_uri = true;
-                break;
-            case '\0':
-                return ParseCode::InvalidRequest;
-            default:
-                if (ch < 0x20 || ch == 0x7f) {
-                    return ParseCode::InvalidRequest;
+                        r.uri_ext = kInvalidPos;
+                        state = RequestLineParser::State::AfterSlashInUri;
+                        break;
+                    case '.':
+                        r.uri_ext = buffer_offset(b, p) + 1;
+                        break;
+                    case ' ':
+                        r.uri_end = buffer_offset(b, p);
+                        state = RequestLineParser::State::Http09;
+                        break;
+                    case '\r':
+                        r.uri_end = buffer_offset(b, p);
+                        r.http_minor = 9;
+                        state = RequestLineParser::State::AlmostDone;
+                        break;
+                    case '\n':
+                        r.uri_end = buffer_offset(b, p);
+                        r.http_minor = 9;
+                        goto done;
+                    case '%':
+                        r.quoted_uri = true;
+                        state = RequestLineParser::State::Uri;
+                        break;
+                    case '?':
+                        r.args_start = buffer_offset(b, p) + 1;
+                        state = RequestLineParser::State::Uri;
+                        break;
+                    case '#':
+                        r.complex_uri = true;
+                        state = RequestLineParser::State::Uri;
+                        break;
+                    case '+':
+                        r.plus_in_uri = true;
+                        break;
+                    case '\0':
+                        return ParseCode::InvalidRequest;
+                    default:
+                        if (ch < 0x20 || ch == 0x7f) {
+                            return ParseCode::InvalidRequest;
+                        }
+                        state = RequestLineParser::State::Uri;
+                        break;
                 }
                 break;
-            }
-            break;
 
-        case RequestLineParser::State::Http09:
-            switch (ch) {
-            case ' ':
+            case RequestLineParser::State::Uri:
+                if (usual[ch >> 5] & (1U << (ch & 0x1f))) {
+                    break;
+                }
+                switch (ch) {
+                    case ' ':
+                        r.uri_end = buffer_offset(b, p);
+                        state = RequestLineParser::State::Http09;
+                        break;
+                    case '\r':
+                        r.uri_end = buffer_offset(b, p);
+                        r.http_minor = 9;
+                        state = RequestLineParser::State::AlmostDone;
+                        break;
+                    case '\n':
+                        r.uri_end = buffer_offset(b, p);
+                        r.http_minor = 9;
+                        goto done;
+                    case '%':
+                        r.quoted_uri = true;
+                        break;
+                    case '#':
+                        r.complex_uri = true;
+                        break;
+                    case '\0':
+                        return ParseCode::InvalidRequest;
+                    default:
+                        if (ch < 0x20 || ch == 0x7f) {
+                            return ParseCode::InvalidRequest;
+                        }
+                        break;
+                }
                 break;
-            case '\r':
-                state = RequestLineParser::State::AlmostDone;
+
+            case RequestLineParser::State::Http09:
+                switch (ch) {
+                    case ' ':
+                        break;
+                    case '\r':
+                        state = RequestLineParser::State::AlmostDone;
+                        break;
+                    case '\n':
+                        goto done;
+                    case 'H':
+                        r.http_protocol_start = buffer_offset(b, p);
+                        state = RequestLineParser::State::HttpH;
+                        break;
+                    default:
+                        return ParseCode::InvalidRequest;
+                }
                 break;
-            case '\n':
-                goto done;
-            case 'H':
-                state = RequestLineParser::State::HttpH;
+
+            case RequestLineParser::State::HttpH:
+                switch (ch) {
+                    case 'T':
+                        state = RequestLineParser::State::HttpHT;
+                        break;
+                    default:
+                        return ParseCode::InvalidRequest;
+                }
                 break;
-            default:
+
+            case RequestLineParser::State::HttpHT:
+                switch (ch) {
+                    case 'T':
+                        state = RequestLineParser::State::HttpHTT;
+                        break;
+                    default:
+                        return ParseCode::InvalidRequest;
+                }
+                break;
+
+            case RequestLineParser::State::HttpHTT:
+                switch (ch) {
+                    case 'P':
+                        state = RequestLineParser::State::HttpHTTP;
+                        break;
+                    default:
+                        return ParseCode::InvalidRequest;
+                }
+                break;
+
+            case RequestLineParser::State::HttpHTTP:
+                switch (ch) {
+                    case '/':
+                        state = RequestLineParser::State::FirstMajorDigit;
+                        break;
+                    default:
+                        return ParseCode::InvalidRequest;
+                }
+                break;
+
+            case RequestLineParser::State::FirstMajorDigit:
+                if (ch < '1' || ch > '9') {
+                    return ParseCode::InvalidVersion;
+                }
+                r.http_major = ch - '0';
+                state = RequestLineParser::State::MajorDigit;
+                break;
+
+            case RequestLineParser::State::MajorDigit:
+                if (ch == '.') {
+                    state = RequestLineParser::State::FirstMinorDigit;
+                    break;
+                }
+                if (ch < '0' || ch > '9') {
+                    return ParseCode::InvalidVersion;
+                }
+                r.http_major = r.http_major * 10 + (ch - '0');
+                break;
+
+            case RequestLineParser::State::FirstMinorDigit:
+                if (ch < '0' || ch > '9') {
+                    return ParseCode::InvalidVersion;
+                }
+                r.http_minor = ch - '0';
+                state = RequestLineParser::State::MinorDigit;
+                break;
+
+            case RequestLineParser::State::MinorDigit:
+                if (ch == '\r') {
+                    state = RequestLineParser::State::AlmostDone;
+                    break;
+                }
+                if (ch == '\n') {
+                    goto done;
+                }
+                if (ch == ' ') {
+                    state = RequestLineParser::State::SpacesAfterDigit;
+                    break;
+                }
+                if (ch < '0' || ch > '9') {
+                    return ParseCode::InvalidVersion;
+                }
+                r.http_minor = r.http_minor * 10 + (ch - '0');
+                break;
+
+            case RequestLineParser::State::SpacesAfterDigit:
+                switch (ch) {
+                    case ' ':
+                        break;
+                    case '\r':
+                        state = RequestLineParser::State::AlmostDone;
+                        break;
+                    case '\n':
+                        goto done;
+                    default:
+                        return ParseCode::InvalidRequest;
+                }
+                break;
+
+            case RequestLineParser::State::AlmostDone:
+                r.request_end = buffer_offset(b, p) - 1;
+                if (ch == '\n') {
+                    goto done;
+                }
                 return ParseCode::InvalidRequest;
-            }
-            break;
-
-        case RequestLineParser::State::HttpH:
-            switch (ch) {
-            case 'T':
-                state = RequestLineParser::State::HttpHT;
-                break;
-            default:
-                return ParseCode::InvalidRequest;
-            }
-            break;
-
-        case RequestLineParser::State::HttpHT:
-            switch (ch) {
-            case 'T':
-                state = RequestLineParser::State::HttpHTT;
-                break;
-            default:
-                return ParseCode::InvalidRequest;
-            }
-            break;
-
-        case RequestLineParser::State::HttpHTT:
-            switch (ch) {
-            case 'P':
-                state = RequestLineParser::State::HttpHTTP;
-                break;
-            default:
-                return ParseCode::InvalidRequest;
-            }
-            break;
-
-        case RequestLineParser::State::HttpHTTP:
-            switch (ch) {
-            case '/':
-                state = RequestLineParser::State::FirstMajorDigit;
-                break;
-            default:
-                return ParseCode::InvalidRequest;
-            }
-            break;
-
-        case RequestLineParser::State::FirstMajorDigit:
-            if (ch < '1' || ch > '9') {
-                return ParseCode::InvalidVersion;
-            }
-            r.http_major = ch - '0';
-            state = RequestLineParser::State::MajorDigit;
-            break;
-
-        case RequestLineParser::State::MajorDigit:
-            if (ch == '.') {
-                state = RequestLineParser::State::FirstMinorDigit;
-                break;
-            }
-            if (ch < '0' || ch > '9') {
-                return ParseCode::InvalidVersion;
-            }
-            r.http_major = r.http_major * 10 + (ch - '0');
-            break;
-
-        case RequestLineParser::State::FirstMinorDigit:
-            if (ch < '0' || ch > '9') {
-                return ParseCode::InvalidVersion;
-            }
-            r.http_minor = ch - '0';
-            state = RequestLineParser::State::MinorDigit;
-            break;
-
-        case RequestLineParser::State::MinorDigit:
-            if (ch == '\r') {
-                state = RequestLineParser::State::AlmostDone;
-                break;
-            }
-            if (ch == '\n') {
-                goto done;
-            }
-            if (ch == ' ') {
-                state = RequestLineParser::State::SpacesAfterDigit;
-                break;
-            }
-            if (ch < '0' || ch > '9') {
-                return ParseCode::InvalidVersion;
-            }
-            r.http_minor = r.http_minor * 10 + (ch - '0');
-            break;
-
-        case RequestLineParser::State::SpacesAfterDigit:
-            switch (ch) {
-            case ' ':
-                break;
-            case '\r':
-                state = RequestLineParser::State::AlmostDone;
-                break;
-            case '\n':
-                goto done;
-            default:
-                return ParseCode::InvalidRequest;
-            }
-            break;
-
-        case RequestLineParser::State::AlmostDone:
-            r.request_end = buffer_offset(b, p) - 1;
-            if (ch == '\n') {
-                goto done;
-            }
-            return ParseCode::InvalidRequest;
         }
     }
 
@@ -754,15 +752,13 @@ done:
     }
     r.http_version = r.http_major * 1000 + r.http_minor;
     state = RequestLineParser::State::Start;
-    if (r.http_version == 9 && !r.method_is_get) {
+    if (r.http_version == 9 && r.method != HttpMethod::Get) {
         return ParseCode::Invalid09Method;
     }
     return ParseCode::Ok;
 }
 
-ParseCode parse_header_line(HeaderLineParser::HeaderLineState &r,
-                            HeaderLineParser::State &state,
-                            ParseBuffer &b,
+ParseCode parse_header_line(HeaderLineParser::HeaderLineState &r, HeaderLineParser::State &state, ParseBuffer &b,
                             bool allow_underscores) {
     unsigned char c = 0;
     unsigned char ch = 0;
@@ -770,15 +766,15 @@ ParseCode parse_header_line(HeaderLineParser::HeaderLineState &r,
     uint32_t hash = 0;
     uint32_t i = 0;
 
-    static const unsigned char lowcase[] =
-        "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-        "\0\0\0\0\0\0\0\0\0\0\0\0\0-\0\0" "0123456789\0\0\0\0\0\0"
-        "\0abcdefghijklmnopqrstuvwxyz\0\0\0\0\0"
-        "\0abcdefghijklmnopqrstuvwxyz\0\0\0\0\0"
-        "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-        "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-        "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-        "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+    static const unsigned char lowcase[] = "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                                           "\0\0\0\0\0\0\0\0\0\0\0\0\0-\0\0"
+                                           "0123456789\0\0\0\0\0\0"
+                                           "\0abcdefghijklmnopqrstuvwxyz\0\0\0\0\0"
+                                           "\0abcdefghijklmnopqrstuvwxyz\0\0\0\0\0"
+                                           "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                                           "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                                           "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                                           "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
 
     hash = r.header_hash;
     i = r.lowcase_index;
@@ -788,181 +784,181 @@ ParseCode parse_header_line(HeaderLineParser::HeaderLineState &r,
 
         switch (state) {
 
-        case HeaderLineParser::State::Start:
-            r.header_name_start = buffer_offset(b, p);
-            r.invalid_header = false;
+            case HeaderLineParser::State::Start:
+                r.header_name_start = buffer_offset(b, p);
+                r.invalid_header = false;
 
-            switch (ch) {
-            case '\r':
-                r.header_end = buffer_offset(b, p);
-                state = HeaderLineParser::State::HeaderAlmostDone;
+                switch (ch) {
+                    case '\r':
+                        r.header_end = buffer_offset(b, p);
+                        state = HeaderLineParser::State::HeaderAlmostDone;
+                        break;
+                    case '\n':
+                        r.header_end = buffer_offset(b, p);
+                        goto header_done;
+                    default:
+                        state = HeaderLineParser::State::Name;
+                        c = lowcase[ch];
+                        if (c) {
+                            hash = ngx_hash(0, c);
+                            r.lowcase_header[0] = static_cast<char>(c);
+                            i = 1;
+                            break;
+                        }
+                        if (ch == '_') {
+                            if (allow_underscores) {
+                                hash = ngx_hash(0, ch);
+                                r.lowcase_header[0] = static_cast<char>(ch);
+                                i = 1;
+                            } else {
+                                hash = 0;
+                                i = 0;
+                                r.invalid_header = true;
+                            }
+                            break;
+                        }
+                        if (ch <= 0x20 || ch == 0x7f || ch == ':') {
+                            r.header_end = buffer_offset(b, p);
+                            return ParseCode::InvalidHeader;
+                        }
+                        hash = 0;
+                        i = 0;
+                        r.invalid_header = true;
+                        break;
+                }
                 break;
-            case '\n':
-                r.header_end = buffer_offset(b, p);
-                goto header_done;
-            default:
-                state = HeaderLineParser::State::Name;
+
+            case HeaderLineParser::State::Name:
                 c = lowcase[ch];
                 if (c) {
-                    hash = ngx_hash(0, c);
-                    r.lowcase_header[0] = static_cast<char>(c);
-                    i = 1;
+                    hash = ngx_hash(hash, c);
+                    r.lowcase_header[i++] = static_cast<char>(c);
+                    i &= (sizeof(r.lowcase_header) - 1);
                     break;
                 }
                 if (ch == '_') {
                     if (allow_underscores) {
-                        hash = ngx_hash(0, ch);
-                        r.lowcase_header[0] = static_cast<char>(ch);
-                        i = 1;
+                        hash = ngx_hash(hash, ch);
+                        r.lowcase_header[i++] = static_cast<char>(ch);
+                        i &= (sizeof(r.lowcase_header) - 1);
                     } else {
-                        hash = 0;
-                        i = 0;
                         r.invalid_header = true;
                     }
                     break;
                 }
-                if (ch <= 0x20 || ch == 0x7f || ch == ':') {
+                if (ch == ':') {
+                    r.header_name_end = buffer_offset(b, p);
+                    state = HeaderLineParser::State::SpaceBeforeValue;
+                    break;
+                }
+                if (ch == '\r') {
+                    r.header_name_end = buffer_offset(b, p);
+                    r.header_start = buffer_offset(b, p);
+                    r.header_end = buffer_offset(b, p);
+                    state = HeaderLineParser::State::AlmostDone;
+                    break;
+                }
+                if (ch == '\n') {
+                    r.header_name_end = buffer_offset(b, p);
+                    r.header_start = buffer_offset(b, p);
+                    r.header_end = buffer_offset(b, p);
+                    goto done;
+                }
+                if (ch <= 0x20 || ch == 0x7f) {
                     r.header_end = buffer_offset(b, p);
                     return ParseCode::InvalidHeader;
                 }
-                hash = 0;
-                i = 0;
                 r.invalid_header = true;
                 break;
-            }
-            break;
 
-        case HeaderLineParser::State::Name:
-            c = lowcase[ch];
-            if (c) {
-                hash = ngx_hash(hash, c);
-                r.lowcase_header[i++] = static_cast<char>(c);
-                i &= (sizeof(r.lowcase_header) - 1);
-                break;
-            }
-            if (ch == '_') {
-                if (allow_underscores) {
-                    hash = ngx_hash(hash, ch);
-                    r.lowcase_header[i++] = static_cast<char>(ch);
-                    i &= (sizeof(r.lowcase_header) - 1);
-                } else {
-                    r.invalid_header = true;
+            case HeaderLineParser::State::SpaceBeforeValue:
+                switch (ch) {
+                    case ' ':
+                        break;
+                    case '\r':
+                        r.header_start = buffer_offset(b, p);
+                        r.header_end = buffer_offset(b, p);
+                        state = HeaderLineParser::State::AlmostDone;
+                        break;
+                    case '\n':
+                        r.header_start = buffer_offset(b, p);
+                        r.header_end = buffer_offset(b, p);
+                        goto done;
+                    case '\0':
+                        r.header_end = buffer_offset(b, p);
+                        return ParseCode::InvalidHeader;
+                    default:
+                        r.header_start = buffer_offset(b, p);
+                        state = HeaderLineParser::State::Value;
+                        break;
                 }
                 break;
-            }
-            if (ch == ':') {
-                r.header_name_end = buffer_offset(b, p);
-                state = HeaderLineParser::State::SpaceBeforeValue;
-                break;
-            }
-            if (ch == '\r') {
-                r.header_name_end = buffer_offset(b, p);
-                r.header_start = buffer_offset(b, p);
-                r.header_end = buffer_offset(b, p);
-                state = HeaderLineParser::State::AlmostDone;
-                break;
-            }
-            if (ch == '\n') {
-                r.header_name_end = buffer_offset(b, p);
-                r.header_start = buffer_offset(b, p);
-                r.header_end = buffer_offset(b, p);
-                goto done;
-            }
-            if (ch <= 0x20 || ch == 0x7f) {
-                r.header_end = buffer_offset(b, p);
-                return ParseCode::InvalidHeader;
-            }
-            r.invalid_header = true;
-            break;
 
-        case HeaderLineParser::State::SpaceBeforeValue:
-            switch (ch) {
-            case ' ':
+            case HeaderLineParser::State::Value:
+                switch (ch) {
+                    case ' ':
+                        r.header_end = buffer_offset(b, p);
+                        state = HeaderLineParser::State::SpaceAfterValue;
+                        break;
+                    case '\r':
+                        r.header_end = buffer_offset(b, p);
+                        state = HeaderLineParser::State::AlmostDone;
+                        break;
+                    case '\n':
+                        r.header_end = buffer_offset(b, p);
+                        goto done;
+                    case '\0':
+                        r.header_end = buffer_offset(b, p);
+                        return ParseCode::InvalidHeader;
+                }
                 break;
-            case '\r':
-                r.header_start = buffer_offset(b, p);
-                r.header_end = buffer_offset(b, p);
-                state = HeaderLineParser::State::AlmostDone;
-                break;
-            case '\n':
-                r.header_start = buffer_offset(b, p);
-                r.header_end = buffer_offset(b, p);
-                goto done;
-            case '\0':
-                r.header_end = buffer_offset(b, p);
-                return ParseCode::InvalidHeader;
-            default:
-                r.header_start = buffer_offset(b, p);
-                state = HeaderLineParser::State::Value;
-                break;
-            }
-            break;
 
-        case HeaderLineParser::State::Value:
-            switch (ch) {
-            case ' ':
-                r.header_end = buffer_offset(b, p);
-                state = HeaderLineParser::State::SpaceAfterValue;
+            case HeaderLineParser::State::SpaceAfterValue:
+                switch (ch) {
+                    case ' ':
+                        break;
+                    case '\r':
+                        state = HeaderLineParser::State::AlmostDone;
+                        break;
+                    case '\n':
+                        goto done;
+                    case '\0':
+                        r.header_end = buffer_offset(b, p);
+                        return ParseCode::InvalidHeader;
+                    default:
+                        state = HeaderLineParser::State::Value;
+                        break;
+                }
                 break;
-            case '\r':
-                r.header_end = buffer_offset(b, p);
-                state = HeaderLineParser::State::AlmostDone;
-                break;
-            case '\n':
-                r.header_end = buffer_offset(b, p);
-                goto done;
-            case '\0':
-                r.header_end = buffer_offset(b, p);
-                return ParseCode::InvalidHeader;
-            }
-            break;
 
-        case HeaderLineParser::State::SpaceAfterValue:
-            switch (ch) {
-            case ' ':
+            case HeaderLineParser::State::IgnoreLine:
+                switch (ch) {
+                    case '\n':
+                        state = HeaderLineParser::State::Start;
+                        break;
+                    default:
+                        break;
+                }
                 break;
-            case '\r':
-                state = HeaderLineParser::State::AlmostDone;
-                break;
-            case '\n':
-                goto done;
-            case '\0':
-                r.header_end = buffer_offset(b, p);
-                return ParseCode::InvalidHeader;
-            default:
-                state = HeaderLineParser::State::Value;
-                break;
-            }
-            break;
 
-        case HeaderLineParser::State::IgnoreLine:
-            switch (ch) {
-            case '\n':
-                state = HeaderLineParser::State::Start;
+            case HeaderLineParser::State::AlmostDone:
+                switch (ch) {
+                    case '\n':
+                        goto done;
+                    case '\r':
+                        break;
+                    default:
+                        return ParseCode::InvalidHeader;
+                }
                 break;
-            default:
-                break;
-            }
-            break;
 
-        case HeaderLineParser::State::AlmostDone:
-            switch (ch) {
-            case '\n':
-                goto done;
-            case '\r':
-                break;
-            default:
-                return ParseCode::InvalidHeader;
-            }
-            break;
-
-        case HeaderLineParser::State::HeaderAlmostDone:
-            switch (ch) {
-            case '\n':
-                goto header_done;
-            default:
-                return ParseCode::InvalidHeader;
-            }
+            case HeaderLineParser::State::HeaderAlmostDone:
+                switch (ch) {
+                    case '\n':
+                        goto header_done;
+                    default:
+                        return ParseCode::InvalidHeader;
+                }
         }
     }
 
@@ -1014,160 +1010,160 @@ ParseCode parse_chunked(BodyParser::ChunkedState &ctx, ParseBuffer &b) {
     for (pos = b.pos; pos < b.last; pos++) {
         ch = static_cast<unsigned char>(*pos);
         switch (state) {
-        case sw_chunk_start:
-            if (ch >= '0' && ch <= '9') {
-                state = sw_chunk_size;
-                ctx.size = ch - '0';
-                break;
-            }
-            c = static_cast<unsigned char>(ch | 0x20u);
-            if (c >= 'a' && c <= 'f') {
-                state = sw_chunk_size;
-                ctx.size = c - 'a' + 10;
-                break;
-            }
-            goto invalid;
-
-        case sw_chunk_size:
-            if (ctx.size > kMaxOffT / 16) {
+            case sw_chunk_start:
+                if (ch >= '0' && ch <= '9') {
+                    state = sw_chunk_size;
+                    ctx.size = ch - '0';
+                    break;
+                }
+                c = static_cast<unsigned char>(ch | 0x20u);
+                if (c >= 'a' && c <= 'f') {
+                    state = sw_chunk_size;
+                    ctx.size = c - 'a' + 10;
+                    break;
+                }
                 goto invalid;
-            }
-            if (ch >= '0' && ch <= '9') {
-                ctx.size = ctx.size * 16 + (ch - '0');
-                break;
-            }
-            c = static_cast<unsigned char>(ch | 0x20u);
-            if (c >= 'a' && c <= 'f') {
-                ctx.size = ctx.size * 16 + (c - 'a' + 10);
-                break;
-            }
-            if (ctx.size == 0) {
-                switch (ch) {
-                case '\r':
-                    state = sw_last_chunk_extension_almost_done;
-                    break;
-                case '\n':
-                    state = sw_trailer;
-                    break;
-                case ';':
-                case ' ':
-                case '\t':
-                    state = sw_last_chunk_extension;
-                    break;
-                default:
+
+            case sw_chunk_size:
+                if (ctx.size > kMaxOffT / 16) {
                     goto invalid;
                 }
+                if (ch >= '0' && ch <= '9') {
+                    ctx.size = ctx.size * 16 + (ch - '0');
+                    break;
+                }
+                c = static_cast<unsigned char>(ch | 0x20u);
+                if (c >= 'a' && c <= 'f') {
+                    ctx.size = ctx.size * 16 + (c - 'a' + 10);
+                    break;
+                }
+                if (ctx.size == 0) {
+                    switch (ch) {
+                        case '\r':
+                            state = sw_last_chunk_extension_almost_done;
+                            break;
+                        case '\n':
+                            state = sw_trailer;
+                            break;
+                        case ';':
+                        case ' ':
+                        case '\t':
+                            state = sw_last_chunk_extension;
+                            break;
+                        default:
+                            goto invalid;
+                    }
+                    break;
+                }
+                switch (ch) {
+                    case '\r':
+                        state = sw_chunk_extension_almost_done;
+                        break;
+                    case '\n':
+                        state = sw_chunk_data;
+                        break;
+                    case ';':
+                    case ' ':
+                    case '\t':
+                        state = sw_chunk_extension;
+                        break;
+                    default:
+                        goto invalid;
+                }
                 break;
-            }
-            switch (ch) {
-            case '\r':
-                state = sw_chunk_extension_almost_done;
+
+            case sw_chunk_extension:
+                switch (ch) {
+                    case '\r':
+                        state = sw_chunk_extension_almost_done;
+                        break;
+                    case '\n':
+                        state = sw_chunk_data;
+                }
                 break;
-            case '\n':
-                state = sw_chunk_data;
-                break;
-            case ';':
-            case ' ':
-            case '\t':
-                state = sw_chunk_extension;
-                break;
-            default:
+
+            case sw_chunk_extension_almost_done:
+                if (ch == '\n') {
+                    state = sw_chunk_data;
+                    break;
+                }
                 goto invalid;
-            }
-            break;
 
-        case sw_chunk_extension:
-            switch (ch) {
-            case '\r':
-                state = sw_chunk_extension_almost_done;
-                break;
-            case '\n':
-                state = sw_chunk_data;
-            }
-            break;
+            case sw_chunk_data:
+                rc = ParseCode::Ok;
+                goto data;
 
-        case sw_chunk_extension_almost_done:
-            if (ch == '\n') {
-                state = sw_chunk_data;
+            case sw_after_data:
+                switch (ch) {
+                    case '\r':
+                        state = sw_after_data_almost_done;
+                        break;
+                    case '\n':
+                        state = sw_chunk_start;
+                        break;
+                    default:
+                        goto invalid;
+                }
                 break;
-            }
-            goto invalid;
 
-        case sw_chunk_data:
-            rc = ParseCode::Ok;
-            goto data;
-
-        case sw_after_data:
-            switch (ch) {
-            case '\r':
-                state = sw_after_data_almost_done;
-                break;
-            case '\n':
-                state = sw_chunk_start;
-                break;
-            default:
+            case sw_after_data_almost_done:
+                if (ch == '\n') {
+                    state = sw_chunk_start;
+                    break;
+                }
                 goto invalid;
-            }
-            break;
 
-        case sw_after_data_almost_done:
-            if (ch == '\n') {
-                state = sw_chunk_start;
+            case sw_last_chunk_extension:
+                switch (ch) {
+                    case '\r':
+                        state = sw_last_chunk_extension_almost_done;
+                        break;
+                    case '\n':
+                        state = sw_trailer;
+                }
                 break;
-            }
-            goto invalid;
 
-        case sw_last_chunk_extension:
-            switch (ch) {
-            case '\r':
-                state = sw_last_chunk_extension_almost_done;
+            case sw_last_chunk_extension_almost_done:
+                if (ch == '\n') {
+                    state = sw_trailer;
+                    break;
+                }
+                goto invalid;
+
+            case sw_trailer:
+                switch (ch) {
+                    case '\r':
+                        state = sw_trailer_almost_done;
+                        break;
+                    case '\n':
+                        goto done;
+                    default:
+                        state = sw_trailer_header;
+                }
                 break;
-            case '\n':
-                state = sw_trailer;
-            }
-            break;
 
-        case sw_last_chunk_extension_almost_done:
-            if (ch == '\n') {
-                state = sw_trailer;
+            case sw_trailer_almost_done:
+                if (ch == '\n') {
+                    goto done;
+                }
+                goto invalid;
+
+            case sw_trailer_header:
+                switch (ch) {
+                    case '\r':
+                        state = sw_trailer_header_almost_done;
+                        break;
+                    case '\n':
+                        state = sw_trailer;
+                }
                 break;
-            }
-            goto invalid;
 
-        case sw_trailer:
-            switch (ch) {
-            case '\r':
-                state = sw_trailer_almost_done;
-                break;
-            case '\n':
-                goto done;
-            default:
-                state = sw_trailer_header;
-            }
-            break;
-
-        case sw_trailer_almost_done:
-            if (ch == '\n') {
-                goto done;
-            }
-            goto invalid;
-
-        case sw_trailer_header:
-            switch (ch) {
-            case '\r':
-                state = sw_trailer_header_almost_done;
-                break;
-            case '\n':
-                state = sw_trailer;
-            }
-            break;
-
-        case sw_trailer_header_almost_done:
-            if (ch == '\n') {
-                state = sw_trailer;
-                break;
-            }
-            goto invalid;
+            case sw_trailer_header_almost_done:
+                if (ch == '\n') {
+                    state = sw_trailer;
+                    break;
+                }
+                goto invalid;
         }
     }
 
@@ -1180,35 +1176,35 @@ data:
     }
 
     switch (state) {
-    case sw_chunk_start:
-        ctx.length = 3;
-        break;
-    case sw_chunk_size:
-        ctx.length = 1 + (ctx.size ? ctx.size + 4 : 1);
-        break;
-    case sw_chunk_extension:
-    case sw_chunk_extension_almost_done:
-        ctx.length = 1 + ctx.size + 4;
-        break;
-    case sw_chunk_data:
-        ctx.length = ctx.size + 4;
-        break;
-    case sw_after_data:
-    case sw_after_data_almost_done:
-        ctx.length = 4;
-        break;
-    case sw_last_chunk_extension:
-    case sw_last_chunk_extension_almost_done:
-        ctx.length = 2;
-        break;
-    case sw_trailer:
-    case sw_trailer_almost_done:
-        ctx.length = 1;
-        break;
-    case sw_trailer_header:
-    case sw_trailer_header_almost_done:
-        ctx.length = 2;
-        break;
+        case sw_chunk_start:
+            ctx.length = 3;
+            break;
+        case sw_chunk_size:
+            ctx.length = 1 + (ctx.size ? ctx.size + 4 : 1);
+            break;
+        case sw_chunk_extension:
+        case sw_chunk_extension_almost_done:
+            ctx.length = 1 + ctx.size + 4;
+            break;
+        case sw_chunk_data:
+            ctx.length = ctx.size + 4;
+            break;
+        case sw_after_data:
+        case sw_after_data_almost_done:
+            ctx.length = 4;
+            break;
+        case sw_last_chunk_extension:
+        case sw_last_chunk_extension_almost_done:
+            ctx.length = 2;
+            break;
+        case sw_trailer:
+        case sw_trailer_almost_done:
+            ctx.length = 1;
+            break;
+        case sw_trailer_header:
+        case sw_trailer_header_almost_done:
+            ctx.length = 2;
+            break;
     }
 
     return rc;
@@ -1224,20 +1220,16 @@ invalid:
 
 } // namespace
 
-RequestLineParser::RequestLineParser() = default;
+RequestLineParser::RequestLineParser(HttpExchange &exchange, const HttpServerOptions &options) :
+    exchange_(&exchange), options_(&options) {}
 
 void RequestLineParser::reset() {
     state_ = State::Start;
     line_ = RequestLineState{};
 }
 
-bool RequestLineParser::carry_over(const char *data,
-                                   size_t size,
-                                   size_t pos,
-                                   char *dst,
-                                   size_t dst_cap,
-                                   size_t &dst_size,
-                                   size_t &dst_pos) {
+bool RequestLineParser::carry_over(const char *data, size_t size, size_t pos, char *dst, size_t dst_cap,
+                                   size_t &dst_size, size_t &dst_pos) {
     if (state_ == State::Start || line_.request_start == kInvalidPos) {
         dst_size = 0;
         dst_pos = 0;
@@ -1278,55 +1270,66 @@ bool RequestLineParser::carry_over(const char *data,
     return true;
 }
 
-ParseCode RequestLineParser::execute(HttpExchange &exchange,
-                                     const HttpServerOptions &,
-                                     const char *data,
-                                     size_t len,
-                                     size_t &offset) {
-    if (!data || len == 0) {
+ParseCode RequestLineParser::execute(ParseBuffer *buffer) {
+    if (!exchange_ || !buffer || !buffer->start || buffer->pos >= buffer->last) {
         return ParseCode::Again;
     }
 
-    ParseBuffer buffer{data, data + offset, data + len};
-    ParseCode rc = parse_request_line(line_, state_, buffer);
-    offset = static_cast<size_t>(buffer.pos - buffer.start);
+    ParseCode rc = parse_request_line(line_, state_, *buffer);
     if (rc != ParseCode::Ok) {
         return rc;
     }
 
-    if (line_.request_start == kInvalidPos || line_.method_end == kInvalidPos ||
-        line_.uri_start == kInvalidPos || line_.uri_end == kInvalidPos) {
+    if (line_.request_start == kInvalidPos || line_.method_end == kInvalidPos || line_.uri_start == kInvalidPos ||
+        line_.uri_end == kInvalidPos) {
         return ParseCode::InvalidRequest;
     }
 
-    const char *base = buffer.start;
+    const char *base = buffer->start;
     size_t method_len = line_.method_end - line_.request_start + 1;
     size_t uri_len = line_.uri_end - line_.uri_start;
-    exchange.method_.assign(base + line_.request_start, method_len);
-    exchange.target_.assign(base + line_.uri_start, uri_len);
+    exchange_->method_view_ = std::string_view(base + line_.request_start, method_len);
+    exchange_->method_ = line_.method;
+    exchange_->uri_.unparsed_uri = std::string_view(base + line_.uri_start, uri_len);
 
     if (line_.http_major < 0 || line_.http_minor < 0) {
         return ParseCode::InvalidRequest;
     }
 
-    exchange.request_http_major_ = line_.http_major;
-    exchange.request_http_minor_ = line_.http_minor;
-    exchange.version_.clear();
-    exchange.version_.append("HTTP/");
-    exchange.version_.append(std::to_string(line_.http_major));
-    exchange.version_.append(".");
-    exchange.version_.append(std::to_string(line_.http_minor));
+    exchange_->version_ = static_cast<HttpVersion>(line_.http_version);
+    exchange_->version_view_ = {};
 
-    if (line_.http_version == 9) {
-        exchange.version_ = "HTTP/0.9";
-        exchange.request_keep_alive_ = false;
-        exchange.body_complete_ = true;
+    if (line_.http_protocol_start != kInvalidPos && line_.request_end != kInvalidPos &&
+        line_.request_end >= line_.http_protocol_start) {
+        size_t version_len = line_.request_end - line_.http_protocol_start + 1;
+        exchange_->version_view_ = std::string_view(base + line_.http_protocol_start, version_len);
+    } else if (line_.http_version == 9) {
+        exchange_->version_view_ = "HTTP/0.9";
+    }
+
+    size_t path_end = line_.uri_end;
+    if (line_.args_start != kInvalidPos && line_.args_start <= line_.uri_end) {
+        if (line_.args_start > line_.uri_start) {
+            path_end = line_.args_start - 1;
+        } else {
+            path_end = line_.uri_start;
+        }
+        exchange_->uri_.query = std::string_view(base + line_.args_start, line_.uri_end - line_.args_start);
+    } else {
+        exchange_->uri_.query = {};
+    }
+    exchange_->uri_.path = std::string_view(base + line_.uri_start, path_end - line_.uri_start);
+    if (line_.uri_ext != kInvalidPos && line_.uri_ext >= line_.uri_start && line_.uri_ext < path_end) {
+        exchange_->uri_.exten = std::string_view(base + line_.uri_ext, path_end - line_.uri_ext);
+    } else {
+        exchange_->uri_.exten = {};
     }
 
     return rc;
 }
 
-HeaderLineParser::HeaderLineParser() = default;
+HeaderLineParser::HeaderLineParser(HttpExchange &exchange, const HttpServerOptions &options) :
+    exchange_(&exchange), options_(&options) {}
 
 void HeaderLineParser::reset() {
     state_ = State::Start;
@@ -1336,13 +1339,8 @@ void HeaderLineParser::reset() {
     last_error_ = HttpParseError::None;
 }
 
-bool HeaderLineParser::carry_over(const char *data,
-                                  size_t size,
-                                  size_t pos,
-                                  char *dst,
-                                  size_t dst_cap,
-                                  size_t &dst_size,
-                                  size_t &dst_pos) {
+bool HeaderLineParser::carry_over(const char *data, size_t size, size_t pos, char *dst, size_t dst_cap,
+                                  size_t &dst_size, size_t &dst_pos) {
     if (state_ == State::Start || line_.header_name_start == kInvalidPos) {
         dst_size = 0;
         dst_pos = 0;
@@ -1373,25 +1371,18 @@ bool HeaderLineParser::carry_over(const char *data,
     return true;
 }
 
-ParseCode HeaderLineParser::execute(HttpExchange &exchange,
-                                    const HttpServerOptions &,
-                                    const char *data,
-                                    size_t len,
-                                    size_t &offset) {
-    if (!data || len == 0) {
+ParseCode HeaderLineParser::execute(ParseBuffer *buffer) {
+    if (!exchange_ || !buffer || !buffer->start || buffer->pos >= buffer->last) {
         return ParseCode::Again;
     }
 
-    ParseBuffer buffer{data, data + offset, data + len};
-
     for (;;) {
-        ParseCode rc = parse_header_line(line_, state_, buffer, true);
-        offset = static_cast<size_t>(buffer.pos - buffer.start);
+        ParseCode rc = parse_header_line(line_, state_, *buffer, true);
 
         if (rc == ParseCode::Ok) {
             if (line_.header_name_start != kInvalidPos && line_.header_name_end != kInvalidPos &&
                 line_.header_name_end >= line_.header_name_start) {
-                const char *base = buffer.start;
+                const char *base = buffer->start;
                 size_t name_len = line_.header_name_end - line_.header_name_start;
                 std::string_view name(base + line_.header_name_start, name_len);
                 std::string_view value;
@@ -1402,7 +1393,7 @@ ParseCode HeaderLineParser::execute(HttpExchange &exchange,
                 } else {
                     value = std::string_view();
                 }
-                if (!exchange.request_headers_.add(name, value)) {
+                if (!exchange_->request_headers_.add(name, value)) {
                     last_error_ = HttpParseError::HeadersTooLarge;
                     return ParseCode::Error;
                 }
@@ -1418,23 +1409,13 @@ ParseCode HeaderLineParser::execute(HttpExchange &exchange,
                         last_error_ = HttpParseError::BadRequest;
                         return ParseCode::Error;
                     }
-                    if (exchange.request_content_length_set_ && exchange.request_content_length_ != length) {
-                        last_error_ = HttpParseError::BadRequest;
-                        return ParseCode::Error;
-                    }
-                    exchange.request_content_length_ = length;
-                    exchange.request_content_length_set_ = true;
                 } else if (lc_valid && match_transfer_encoding(name_hash, name_len, lc)) {
                     bool chunked = false;
                     if (!parse_transfer_encoding(value, chunked)) {
                         last_error_ = HttpParseError::UnsupportedTransferEncoding;
                         return ParseCode::Error;
                     }
-                    exchange.request_chunked_ = chunked;
                 } else if (lc_valid && match_expect(name_hash, name_len, lc)) {
-                    if (has_token(value, "100-continue")) {
-                        exchange.request_expect_continue_ = true;
-                    }
                 } else if (lc_valid && match_connection(name_hash, name_len, lc)) {
                     if (has_token(value, "close")) {
                         connection_close_ = true;
@@ -1470,9 +1451,7 @@ void BodyParser::reset() {
     chunked_state_ = ChunkedState{};
 }
 
-HttpParseResult BodyParser::execute(HttpExchange &exchange,
-                                    const HttpServerOptions &options,
-                                    const char *data,
+HttpParseResult BodyParser::execute(HttpExchange &exchange, const HttpServerOptions &options, const char *data,
                                     size_t len) {
     HttpParseResult result{};
     if (!data || len == 0) {
@@ -1498,38 +1477,9 @@ HttpParseResult BodyParser::execute(HttpExchange &exchange,
     };
 
     if (state_ == State::Init) {
-        if (!exchange.request_chunked_ && !exchange.request_content_length_set_) {
-            exchange.body_complete_ = true;
-            state_ = State::Done;
-            result.state = HttpParseState::MessageComplete;
-            return result;
-        }
-        if (exchange.request_chunked_) {
-            state_ = State::Chunked;
-        } else {
-            state_ = State::ContentLength;
-        }
     }
 
     if (state_ == State::ContentLength) {
-        if (!exchange.request_content_length_set_ || exchange.request_content_length_ == 0) {
-            exchange.body_complete_ = true;
-            state_ = State::Done;
-            result.state = HttpParseState::MessageComplete;
-            return result;
-        }
-
-        size_t remaining = 0;
-        if (exchange.request_content_length_ > body_bytes_) {
-            remaining = exchange.request_content_length_ - body_bytes_;
-        }
-
-        if (remaining == 0) {
-            exchange.body_complete_ = true;
-            state_ = State::Done;
-            result.state = HttpParseState::MessageComplete;
-            return result;
-        }
 
         size_t available = parse_buffer_.size() - parse_offset_;
         if (available == 0) {
@@ -1537,22 +1487,6 @@ HttpParseResult BodyParser::execute(HttpExchange &exchange,
             return result;
         }
 
-        size_t to_copy = std::min(remaining, available);
-        if (body_bytes_ + to_copy > options.max_body_bytes) {
-            return fail(HttpParseError::BodyTooLarge);
-        }
-
-        exchange.body_buffer_.append(parse_buffer_.data() + parse_offset_, to_copy);
-        parse_offset_ += to_copy;
-        body_bytes_ += to_copy;
-        compact_buffer();
-
-        if (body_bytes_ >= exchange.request_content_length_) {
-            exchange.body_complete_ = true;
-            state_ = State::Done;
-            result.state = HttpParseState::MessageComplete;
-            return result;
-        }
 
         result.state = HttpParseState::NeedMore;
         return result;
@@ -1582,8 +1516,7 @@ HttpParseResult BodyParser::execute(HttpExchange &exchange,
                 continue;
             }
 
-            ParseBuffer buffer{parse_buffer_.data(),
-                               parse_buffer_.data() + parse_offset_,
+            ParseBuffer buffer{parse_buffer_.data(), parse_buffer_.data() + parse_offset_,
                                parse_buffer_.data() + parse_buffer_.size()};
             ParseCode rc = parse_chunked(chunked_state_, buffer);
             parse_offset_ = static_cast<size_t>(buffer.pos - buffer.start);
@@ -1602,7 +1535,6 @@ HttpParseResult BodyParser::execute(HttpExchange &exchange,
             }
 
             if (rc == ParseCode::Done) {
-                exchange.body_complete_ = true;
                 state_ = State::Done;
                 result.state = HttpParseState::MessageComplete;
                 return result;

@@ -17,17 +17,12 @@ HttpExchange::HttpExchange(Http1Connection &connection,
 }
 
 void HttpExchange::reset() {
-    method_.clear();
-    target_.clear();
-    version_.clear();
-    request_http_major_ = 1;
-    request_http_minor_ = 1;
+    method_ = HttpMethod::Unknown;
+    version_ = static_cast<HttpVersion>(0);
+    uri_ = HttpUri{};
+    method_view_ = {};
+    version_view_ = {};
     request_headers_.release();
-    request_chunked_ = false;
-    request_expect_continue_ = false;
-    request_keep_alive_ = true;
-    request_content_length_ = 0;
-    request_content_length_set_ = false;
 
     response_headers_.release();
     response_chunked_ = false;
@@ -44,21 +39,19 @@ void HttpExchange::reset() {
     }
 
     body_buffer_.clear();
-    body_complete_ = false;
-    continue_sent_ = false;
     body_parser_.reset();
 }
 
 std::string_view HttpExchange::method() const noexcept {
-    return method_;
+    return method_view_;
 }
 
 std::string_view HttpExchange::target() const noexcept {
-    return target_;
+    return uri_.unparsed_uri;
 }
 
 std::string_view HttpExchange::version() const noexcept {
-    return version_;
+    return version_view_;
 }
 
 std::string_view HttpExchange::header(std::string_view name) const noexcept {
@@ -75,14 +68,6 @@ HttpHeaders &HttpExchange::response_headers() noexcept {
 
 mem::BufPool &HttpExchange::pool() noexcept {
     return *header_pool_;
-}
-
-bool HttpExchange::request_chunked() const noexcept {
-    return request_chunked_;
-}
-
-size_t HttpExchange::request_content_length() const noexcept {
-    return request_content_length_;
 }
 
 fiber::async::Task<common::IoResult<ReadBodyResult>> HttpExchange::read_body(void *buf, size_t len) noexcept {

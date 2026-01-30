@@ -9,13 +9,14 @@
 #include <string_view>
 #include <vector>
 
+#include "../async/Task.h"
 #include "../common/IoError.h"
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
 #include "../common/mem/BufPool.h"
-#include "../async/Task.h"
-#include "HttpHeaders.h"
+#include "HttpCommon.h"
 #include "Http1Parser.h"
+#include "HttpHeaders.h"
 #include "TlsOptions.h"
 
 namespace fiber::http {
@@ -41,6 +42,7 @@ struct ReadBodyResult {
 class Http1Connection;
 class BodyParser;
 
+
 class HttpExchange : public common::NonCopyable, public common::NonMovable {
 public:
     std::string_view method() const noexcept;
@@ -50,8 +52,6 @@ public:
     const HttpHeaders &request_headers() const noexcept;
     HttpHeaders &response_headers() noexcept;
     mem::BufPool &pool() noexcept;
-    bool request_chunked() const noexcept;
-    size_t request_content_length() const noexcept;
 
     fiber::async::Task<common::IoResult<ReadBodyResult>> read_body(void *buf, size_t len) noexcept;
     fiber::async::Task<common::IoResult<void>> discard_body() noexcept;
@@ -61,11 +61,8 @@ public:
     void set_response_chunked();
     void set_response_close();
 
-    fiber::async::Task<common::IoResult<void>> send_response_header(int status,
-                                                                    std::string_view reason = {});
-    fiber::async::Task<common::IoResult<size_t>> write_body(const void *buf,
-                                                            size_t len,
-                                                            bool end) noexcept;
+    fiber::async::Task<common::IoResult<void>> send_response_header(int status, std::string_view reason = {});
+    fiber::async::Task<common::IoResult<size_t>> write_body(const void *buf, size_t len, bool end) noexcept;
 
 private:
     friend class Http1Connection;
@@ -73,27 +70,19 @@ private:
     friend class HeaderLineParser;
     friend class BodyParser;
 
-    explicit HttpExchange(Http1Connection &connection,
-                          const HttpServerOptions &options,
-                          mem::BufPool &header_pool);
+    explicit HttpExchange(Http1Connection &connection, const HttpServerOptions &options, mem::BufPool &header_pool);
     void reset();
 
     Http1Connection *connection_ = nullptr;
     const HttpServerOptions *options_ = nullptr;
     mem::BufPool *header_pool_ = nullptr;
 
-    std::string method_;
-    std::string target_;
-    std::string version_;
-    int request_http_major_ = 1;
-    int request_http_minor_ = 1;
+    HttpMethod method_{};
+    HttpVersion version_{};
+    HttpUri uri_;
+    std::string_view method_view_;
+    std::string_view version_view_;
     HttpHeaders request_headers_;
-
-    bool request_chunked_ = false;
-    bool request_expect_continue_ = false;
-    bool request_keep_alive_ = true;
-    size_t request_content_length_ = 0;
-    bool request_content_length_set_ = false;
 
     HttpHeaders response_headers_;
     bool response_chunked_ = false;
@@ -105,8 +94,6 @@ private:
     size_t response_body_sent_ = 0;
 
     std::string body_buffer_;
-    bool body_complete_ = false;
-    bool continue_sent_ = false;
 
     BodyParser body_parser_{};
 };
