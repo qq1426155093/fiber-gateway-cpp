@@ -10,7 +10,7 @@ namespace fiber::http {
 namespace {
 
 uint64_t hash_name(std::string_view name) {
-    uint32_t hash = 0;
+    std::uint32_t hash = 0;
     for (char ch : name) {
         unsigned char lower = static_cast<unsigned char>(ch);
         if (lower >= 'A' && lower <= 'Z') {
@@ -59,7 +59,7 @@ size_t next_pow2(size_t value) {
 
 void to_lowcase_and_hash(std::string_view name, std::string &out, uint64_t &hash_out) {
     out.resize(name.size());
-    uint32_t hash = 0;
+    std::uint32_t hash = 0;
     for (size_t i = 0; i < name.size(); ++i) {
         unsigned char lower = static_cast<unsigned char>(name[i]);
         if (lower >= 'A' && lower <= 'Z') {
@@ -73,131 +73,140 @@ void to_lowcase_and_hash(std::string_view name, std::string &out, uint64_t &hash
 
 } // namespace
 
-HttpHeaders::HttpHeaders(mem::BufPool &pool)
-    : pool_(&pool),
-      fields_(mem::PoolAllocator<HeaderField>(pool)),
-      bucket_head_(mem::PoolAllocator<uint32_t>(pool)),
-      bucket_tail_(mem::PoolAllocator<uint32_t>(pool)) {
-}
+HttpHeaders::HttpHeaders(mem::BufPool &pool) : pool_(&pool) {}
 
-bool HttpHeaders::add(std::string_view name, std::string_view value) {
+HttpHeaders::HeaderField *HttpHeaders::add(std::string_view name, std::string_view value) {
     if (!ensure_buckets() || !pool_) {
-        return false;
+        return nullptr;
     }
     if (name.size() > std::numeric_limits<uint32_t>::max() ||
         value.size() > std::numeric_limits<uint32_t>::max()) {
-        return false;
+        return nullptr;
     }
 
     bool ok = true;
     const char *name_ptr = copy_to_pool(name, ok);
     if (!ok) {
-        return false;
+        return nullptr;
     }
     uint64_t hash = 0;
     const char *lowcase_ptr = copy_lowercase_to_pool(name, hash, ok);
     if (!ok) {
-        return false;
+        return nullptr;
     }
     const char *value_ptr = copy_to_pool(value, ok);
     if (!ok) {
-        return false;
+        return nullptr;
+    }
+    HeaderField *field = alloc_field(ok);
+    if (!ok) {
+        return nullptr;
     }
 
-    HeaderField field{};
-    field.name = name_ptr;
-    field.name_len = static_cast<uint32_t>(name.size());
-    field.lowcase_name = lowcase_ptr;
-    field.lowcase_len = static_cast<uint32_t>(name.size());
-    field.value = value_ptr;
-    field.value_len = static_cast<uint32_t>(value.size());
-    field.name_hash = hash;
-    field.next = kInvalidIndex;
+    field->name = name_ptr;
+    field->name_len = static_cast<uint32_t>(name.size());
+    field->lowcase_name = lowcase_ptr;
+    field->lowcase_len = static_cast<uint32_t>(name.size());
+    field->value = value_ptr;
+    field->value_len = static_cast<uint32_t>(value.size());
+    field->name_hash = hash;
+    field->next_bucket = nullptr;
+    field->next_all = nullptr;
+    field->prev_all = nullptr;
 
-    uint32_t index = static_cast<uint32_t>(fields_.size());
-    fields_.push_back(field);
+    std::uint32_t bucket = static_cast<std::uint32_t>(hash & (bucket_head_.size() - 1));
+    field->next_bucket = bucket_head_[bucket];
+    bucket_head_[bucket] = field;
 
-    uint32_t bucket = static_cast<uint32_t>(field.name_hash & (bucket_head_.size() - 1));
-    if (bucket_head_[bucket] == kInvalidIndex) {
-        bucket_head_[bucket] = index;
-        bucket_tail_[bucket] = index;
+    if (!all_head_) {
+        all_head_ = field;
+        all_tail_ = field;
     } else {
-        uint32_t tail = bucket_tail_[bucket];
-        fields_[tail].next = index;
-        bucket_tail_[bucket] = index;
+        field->prev_all = all_tail_;
+        all_tail_->next_all = field;
+        all_tail_ = field;
     }
-    return true;
+    ++size_;
+    return field;
 }
 
-bool HttpHeaders::add(std::string_view name, std::string_view value, std::string_view lowcase_name, uint64_t hash) {
+HttpHeaders::HeaderField *HttpHeaders::add(std::string_view name, std::string_view value,
+                                           std::string_view lowcase_name, uint64_t hash) {
     if (!ensure_buckets() || !pool_) {
-        return false;
+        return nullptr;
     }
     if (name.size() > std::numeric_limits<uint32_t>::max() ||
         value.size() > std::numeric_limits<uint32_t>::max() ||
         lowcase_name.size() > std::numeric_limits<uint32_t>::max()) {
-        return false;
+        return nullptr;
     }
 
     bool ok = true;
     const char *name_ptr = copy_to_pool(name, ok);
     if (!ok) {
-        return false;
+        return nullptr;
     }
     const char *lowcase_ptr = copy_to_pool(lowcase_name, ok);
     if (!ok) {
-        return false;
+        return nullptr;
     }
     const char *value_ptr = copy_to_pool(value, ok);
     if (!ok) {
-        return false;
+        return nullptr;
+    }
+    HeaderField *field = alloc_field(ok);
+    if (!ok) {
+        return nullptr;
     }
 
-    HeaderField field{};
-    field.name = name_ptr;
-    field.name_len = static_cast<uint32_t>(name.size());
-    field.lowcase_name = lowcase_ptr;
-    field.lowcase_len = static_cast<uint32_t>(lowcase_name.size());
-    field.value = value_ptr;
-    field.value_len = static_cast<uint32_t>(value.size());
-    field.name_hash = hash;
-    field.next = kInvalidIndex;
+    field->name = name_ptr;
+    field->name_len = static_cast<uint32_t>(name.size());
+    field->lowcase_name = lowcase_ptr;
+    field->lowcase_len = static_cast<uint32_t>(lowcase_name.size());
+    field->value = value_ptr;
+    field->value_len = static_cast<uint32_t>(value.size());
+    field->name_hash = hash;
+    field->next_bucket = nullptr;
+    field->next_all = nullptr;
+    field->prev_all = nullptr;
 
-    uint32_t index = static_cast<uint32_t>(fields_.size());
-    fields_.push_back(field);
+    std::uint32_t bucket = static_cast<std::uint32_t>(hash & (bucket_head_.size() - 1));
+    field->next_bucket = bucket_head_[bucket];
+    bucket_head_[bucket] = field;
 
-    uint32_t bucket = static_cast<uint32_t>(field.name_hash & (bucket_head_.size() - 1));
-    if (bucket_head_[bucket] == kInvalidIndex) {
-        bucket_head_[bucket] = index;
-        bucket_tail_[bucket] = index;
+    if (!all_head_) {
+        all_head_ = field;
+        all_tail_ = field;
     } else {
-        uint32_t tail = bucket_tail_[bucket];
-        fields_[tail].next = index;
-        bucket_tail_[bucket] = index;
+        field->prev_all = all_tail_;
+        all_tail_->next_all = field;
+        all_tail_ = field;
     }
-    return true;
+    ++size_;
+    return field;
 }
 
-bool HttpHeaders::set(std::string_view name, std::string_view value) {
+HttpHeaders::HeaderField *HttpHeaders::set(std::string_view name, std::string_view value) {
     remove(name);
     return add(name, value);
 }
 
-bool HttpHeaders::set(std::string_view name, std::string_view value, std::string_view lowcase_name, uint64_t hash) {
+HttpHeaders::HeaderField *HttpHeaders::set(std::string_view name, std::string_view value,
+                                           std::string_view lowcase_name, uint64_t hash) {
     remove_lowcase(lowcase_name, hash);
     return add(name, value, lowcase_name, hash);
 }
 
 std::string_view HttpHeaders::get(std::string_view name) const noexcept {
-    uint32_t index = find_first_index(name);
-    if (index == kInvalidIndex) {
+    HeaderField *node = find_first_node(name);
+    if (!node) {
         return {};
     }
-    return fields_[index].value_view();
+    return node->value_view();
 }
 
 bool HttpHeaders::contains(std::string_view name) const noexcept {
-    return find_first_index(name) != kInvalidIndex;
+    return find_first_node(name) != nullptr;
 }
 
 HttpHeaders::MatchRange HttpHeaders::get_all(std::string_view lowcase_key, uint64_t hash) const noexcept {
@@ -213,96 +222,120 @@ HttpHeaders::MatchRange HttpHeaders::get_all(std::string_view name) const {
 }
 
 size_t HttpHeaders::remove(std::string_view name) noexcept {
-    if (fields_.empty()) {
+    if (!all_head_ || bucket_head_.empty()) {
         return 0;
     }
     uint64_t name_hash = hash_name(name);
+    std::uint32_t bucket = static_cast<std::uint32_t>(name_hash & (bucket_head_.size() - 1));
+
     size_t removed = 0;
-    size_t out = 0;
-    for (size_t i = 0; i < fields_.size(); ++i) {
-        const auto &field = fields_[i];
-        if (field.name_hash == name_hash &&
-            equals_ascii_ci(field.name_view(), name)) {
+    HeaderField *prev_bucket = nullptr;
+    HeaderField *node = bucket_head_[bucket];
+    while (node) {
+        HeaderField *next = node->next_bucket;
+        if (node->name_hash == name_hash && equals_ascii_ci(node->name_view(), name)) {
+            if (prev_bucket) {
+                prev_bucket->next_bucket = next;
+            } else {
+                bucket_head_[bucket] = next;
+            }
+
+            if (node->prev_all) {
+                node->prev_all->next_all = node->next_all;
+            } else {
+                all_head_ = node->next_all;
+            }
+            if (node->next_all) {
+                node->next_all->prev_all = node->prev_all;
+            } else {
+                all_tail_ = node->prev_all;
+            }
+
             ++removed;
-            continue;
+            --size_;
+        } else {
+            prev_bucket = node;
         }
-        if (out != i) {
-            fields_[out] = field;
-        }
-        ++out;
+        node = next;
     }
-    if (removed == 0) {
-        return 0;
-    }
-    fields_.resize(out);
-    rebuild_buckets();
     return removed;
 }
 
 size_t HttpHeaders::remove_lowcase(std::string_view lowcase_key, uint64_t hash) noexcept {
-    if (fields_.empty()) {
+    if (!all_head_ || bucket_head_.empty()) {
         return 0;
     }
+    std::uint32_t bucket = static_cast<std::uint32_t>(hash & (bucket_head_.size() - 1));
+
     size_t removed = 0;
-    size_t out = 0;
-    for (size_t i = 0; i < fields_.size(); ++i) {
-        const auto &field = fields_[i];
-        if (field.name_hash == hash &&
-            field.lowcase_view() == lowcase_key) {
+    HeaderField *prev_bucket = nullptr;
+    HeaderField *node = bucket_head_[bucket];
+    while (node) {
+        HeaderField *next = node->next_bucket;
+        if (node->name_hash == hash && node->lowcase_view() == lowcase_key) {
+            if (prev_bucket) {
+                prev_bucket->next_bucket = next;
+            } else {
+                bucket_head_[bucket] = next;
+            }
+
+            if (node->prev_all) {
+                node->prev_all->next_all = node->next_all;
+            } else {
+                all_head_ = node->next_all;
+            }
+            if (node->next_all) {
+                node->next_all->prev_all = node->prev_all;
+            } else {
+                all_tail_ = node->prev_all;
+            }
+
             ++removed;
-            continue;
+            --size_;
+        } else {
+            prev_bucket = node;
         }
-        if (out != i) {
-            fields_[out] = field;
-        }
-        ++out;
+        node = next;
     }
-    if (removed == 0) {
-        return 0;
-    }
-    fields_.resize(out);
-    rebuild_buckets();
     return removed;
 }
 
 void HttpHeaders::reserve_bytes(size_t bytes) {
     size_t estimated_fields = bytes / 32 + 8;
-    fields_.reserve(estimated_fields);
-    if (bucket_head_.empty()) {
-        size_t buckets = next_pow2(std::max(kDefaultBuckets, estimated_fields * 2));
+    size_t buckets = next_pow2(std::max(kDefaultBuckets, estimated_fields * 2));
+    if (bucket_head_.size() < buckets) {
         init_buckets(buckets);
+        rebuild_buckets();
     }
 }
 
 void HttpHeaders::clear() noexcept {
-    fields_.clear();
+    all_head_ = nullptr;
+    all_tail_ = nullptr;
+    size_ = 0;
     if (!bucket_head_.empty()) {
-        std::fill(bucket_head_.begin(), bucket_head_.end(), kInvalidIndex);
-        std::fill(bucket_tail_.begin(), bucket_tail_.end(), kInvalidIndex);
+        std::fill(bucket_head_.begin(), bucket_head_.end(), nullptr);
     }
 }
 
 void HttpHeaders::release() noexcept {
-    FieldVector empty_fields(fields_.get_allocator());
-    fields_.swap(empty_fields);
-
-    BucketVector empty_head(bucket_head_.get_allocator());
-    bucket_head_.swap(empty_head);
-
-    BucketVector empty_tail(bucket_tail_.get_allocator());
-    bucket_tail_.swap(empty_tail);
+    all_head_ = nullptr;
+    all_tail_ = nullptr;
+    size_ = 0;
+    BucketVector empty;
+    bucket_head_.swap(empty);
 }
 
 size_t HttpHeaders::size() const noexcept {
-    return fields_.size();
+    return size_;
 }
 
-HttpHeaders::FieldVector::const_iterator HttpHeaders::begin() const noexcept {
-    return fields_.begin();
+HttpHeaders::ConstIterator HttpHeaders::begin() const noexcept {
+    return ConstIterator(all_head_);
 }
 
-HttpHeaders::FieldVector::const_iterator HttpHeaders::end() const noexcept {
-    return fields_.end();
+HttpHeaders::ConstIterator HttpHeaders::end() const noexcept {
+    return ConstIterator(nullptr);
 }
 
 bool HttpHeaders::ensure_buckets() {
@@ -320,80 +353,67 @@ void HttpHeaders::init_buckets(size_t count) {
     if (count < kDefaultBuckets) {
         count = kDefaultBuckets;
     }
-    bucket_head_.assign(count, kInvalidIndex);
-    bucket_tail_.assign(count, kInvalidIndex);
+    bucket_head_.assign(count, nullptr);
 }
 
 void HttpHeaders::rebuild_buckets() noexcept {
     if (bucket_head_.empty()) {
         return;
     }
-    std::fill(bucket_head_.begin(), bucket_head_.end(), kInvalidIndex);
-    std::fill(bucket_tail_.begin(), bucket_tail_.end(), kInvalidIndex);
-    for (uint32_t index = 0; index < fields_.size(); ++index) {
-        auto &field = fields_[index];
-        field.next = kInvalidIndex;
-        uint32_t bucket = static_cast<uint32_t>(field.name_hash & (bucket_head_.size() - 1));
-        if (bucket_head_[bucket] == kInvalidIndex) {
-            bucket_head_[bucket] = index;
-            bucket_tail_[bucket] = index;
-        } else {
-            uint32_t tail = bucket_tail_[bucket];
-            fields_[tail].next = index;
-            bucket_tail_[bucket] = index;
-        }
+    std::fill(bucket_head_.begin(), bucket_head_.end(), nullptr);
+    for (HeaderField *node = all_head_; node; node = node->next_all) {
+        std::uint32_t bucket = static_cast<std::uint32_t>(node->name_hash & (bucket_head_.size() - 1));
+        node->next_bucket = bucket_head_[bucket];
+        bucket_head_[bucket] = node;
     }
 }
 
-uint32_t HttpHeaders::find_first_index(std::string_view name) const noexcept {
+HttpHeaders::HeaderField *HttpHeaders::find_first_node(std::string_view name) const noexcept {
     if (bucket_head_.empty()) {
-        return kInvalidIndex;
+        return nullptr;
     }
     uint64_t name_hash = hash_name(name);
-    uint32_t bucket = static_cast<uint32_t>(name_hash & (bucket_head_.size() - 1));
-    uint32_t index = bucket_head_[bucket];
-    while (index != kInvalidIndex) {
-        const auto &field = fields_[index];
-        if (field.name_hash == name_hash &&
-            equals_ascii_ci(field.name_view(), name)) {
-            return index;
+    std::uint32_t bucket = static_cast<std::uint32_t>(name_hash & (bucket_head_.size() - 1));
+    HeaderField *node = bucket_head_[bucket];
+    while (node) {
+        if (node->name_hash == name_hash && equals_ascii_ci(node->name_view(), name)) {
+            return node;
         }
-        index = field.next;
+        node = node->next_bucket;
     }
-    return kInvalidIndex;
+    return nullptr;
 }
 
-uint32_t HttpHeaders::find_first_index_lowcase(std::string_view lowcase_key, uint64_t hash) const noexcept {
+const HttpHeaders::HeaderField *HttpHeaders::find_first_node_lowcase(std::string_view lowcase_key,
+                                                                     uint64_t hash) const noexcept {
     if (bucket_head_.empty()) {
-        return kInvalidIndex;
+        return nullptr;
     }
-    uint32_t bucket = static_cast<uint32_t>(hash & (bucket_head_.size() - 1));
-    uint32_t index = bucket_head_[bucket];
-    while (index != kInvalidIndex) {
-        const auto &field = fields_[index];
-        if (field.name_hash == hash &&
-            field.lowcase_view() == lowcase_key) {
-            return index;
+    std::uint32_t bucket = static_cast<std::uint32_t>(hash & (bucket_head_.size() - 1));
+    HeaderField *node = bucket_head_[bucket];
+    while (node) {
+        if (node->name_hash == hash && node->lowcase_view() == lowcase_key) {
+            return node;
         }
-        index = field.next;
+        node = node->next_bucket;
     }
-    return kInvalidIndex;
+    return nullptr;
 }
 
-uint32_t HttpHeaders::next_match_index(uint32_t start, std::string_view lowcase_key, uint64_t hash) const noexcept {
-    if (start == kInvalidIndex) {
-        return kInvalidIndex;
+const HttpHeaders::HeaderField *HttpHeaders::next_match_node(const HeaderField *start,
+                                                             std::string_view lowcase_key,
+                                                             uint64_t hash) const noexcept {
+    if (!start) {
+        return nullptr;
     }
-    uint32_t index = fields_[start].next;
-    while (index != kInvalidIndex) {
-        const auto &field = fields_[index];
-        if (field.name_hash == hash &&
-            field.lowcase_view() == lowcase_key) {
-            return index;
+    const HeaderField *node = start->next_bucket;
+    while (node) {
+        if (node->name_hash == hash && node->lowcase_view() == lowcase_key) {
+            return node;
         }
-        index = field.next;
+        node = node->next_bucket;
     }
-    return kInvalidIndex;
+    return nullptr;
 }
 
 const char *HttpHeaders::copy_to_pool(std::string_view data, bool &ok) {
@@ -414,10 +434,14 @@ const char *HttpHeaders::copy_to_pool(std::string_view data, bool &ok) {
 }
 
 const char *HttpHeaders::copy_lowercase_to_pool(std::string_view data, uint64_t &hash, bool &ok) {
-    uint32_t local_hash = 0;
+    std::uint32_t local_hash = 0;
     if (data.empty()) {
         hash = 0;
         return "";
+    }
+    if (!pool_) {
+        ok = false;
+        return nullptr;
     }
     char *ptr = static_cast<char *>(pool_->alloc(data.size(), alignof(char)));
     if (!ptr) {
@@ -434,6 +458,19 @@ const char *HttpHeaders::copy_lowercase_to_pool(std::string_view data, uint64_t 
     }
     hash = static_cast<uint64_t>(local_hash);
     return ptr;
+}
+
+HttpHeaders::HeaderField *HttpHeaders::alloc_field(bool &ok) {
+    if (!pool_) {
+        ok = false;
+        return nullptr;
+    }
+    void *ptr = pool_->alloc(sizeof(HeaderField), alignof(HeaderField));
+    if (!ptr) {
+        ok = false;
+        return nullptr;
+    }
+    return static_cast<HeaderField *>(ptr);
 }
 
 } // namespace fiber::http
