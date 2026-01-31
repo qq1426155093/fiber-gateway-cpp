@@ -26,34 +26,35 @@ struct HttpServerOptions {
     std::chrono::seconds header_timeout{10};
     std::chrono::seconds body_timeout{60};
     std::chrono::seconds write_timeout{30};
-    size_t max_header_bytes = 16 * 1024;
-    size_t max_body_bytes = 16 * 1024 * 1024;
-    size_t max_chunk_bytes = 4 * 1024 * 1024;
-    bool auto_100_continue = true;
+    std::size_t header_init_size = 8 * 1024;
+    std::size_t header_large_size = 32 * 1024;
+    std::size_t header_large_num = 4;
     bool drain_unread_body = false;
     TlsOptions tls{};
 };
 
 struct ReadBodyResult {
-    size_t size = 0;
+    std::size_t size = 0;
     bool end = false;
 };
 
-class Http1Connection;
 class BodyParser;
+class Http1Context;
 
 
 class HttpExchange : public common::NonCopyable, public common::NonMovable {
 public:
+    explicit HttpExchange(const HttpServerOptions &options);
+
     [[nodiscard]] HttpMethod method() const noexcept { return method_; }
     [[nodiscard]] HttpVersion version() const noexcept { return version_; }
     [[nodiscard]] const HttpUri &uri() const noexcept { return uri_; }
     std::string_view version_view() const noexcept { return version_view_; }
     std::string_view method_view() const noexcept { return method_view_; }
     std::string_view header(std::string_view name) const noexcept;
-    const HttpHeaders &request_headers() const noexcept;
-    HttpHeaders &response_headers() noexcept;
-    mem::BufPool &pool() noexcept;
+    const HttpHeaders &request_headers() const noexcept { return request_headers_; };
+    HttpHeaders &response_headers() noexcept { return response_headers_; };
+    mem::BufPool &pool() noexcept { return pool_; }
 
     fiber::async::Task<common::IoResult<ReadBodyResult>> read_body(void *buf, size_t len) noexcept;
     fiber::async::Task<common::IoResult<void>> discard_body() noexcept;
@@ -67,16 +68,12 @@ public:
     fiber::async::Task<common::IoResult<size_t>> write_body(const void *buf, size_t len, bool end) noexcept;
 
 private:
-    friend class Http1Connection;
     friend class RequestLineParser;
     friend class HeaderLineParser;
     friend class BodyParser;
+    friend class Http1Context;
 
-    explicit HttpExchange(Http1Connection &connection, const HttpServerOptions &options);
-
-    Http1Connection *connection_ = nullptr;
-    mem::BufPool pool_;
-
+    fiber::mem::BufPool pool_;
     HttpMethod method_{};
     HttpVersion version_{};
     HttpUri uri_;
@@ -92,8 +89,10 @@ private:
     bool response_content_length_set_ = false;
     size_t response_content_length_ = 0;
     size_t response_body_sent_ = 0;
+    BufChain *header_adjacent_body_{};
 
     std::string body_buffer_;
+
 
     BodyParser body_parser_{};
 };

@@ -60,7 +60,14 @@ public:
         return c;
     }
 
-    void reset() noexcept { cursor_ = head_; }
+    void reset() noexcept {
+        cursor_ = head_;
+        Chain *c = head_;
+        while (c != nullptr) {
+            c->pos = c->last = c->start;
+            c = c->next;
+        }
+    }
     [[nodiscard]] std::size_t alloc_num() const noexcept { return alloc_num_; }
     [[nodiscard]] const Opt &opt() const noexcept { return opt_; }
     [[nodiscard]] bool exhausted() const noexcept { return alloc_num_ > opt_.large_num; }

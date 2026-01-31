@@ -142,6 +142,23 @@ HttpMethod parse_method(const std::uint8_t *m, size_t len) {
     return HttpMethod::Unknown;
 }
 
+HttpVersion to_http_version(int version) {
+    switch (version) {
+        case 9:
+            return HttpVersion::HTTP_0_9;
+        case 1000:
+            return HttpVersion::HTTP_1_0;
+        case 1001:
+            return HttpVersion::HTTP_1_1;
+        case 2000:
+            return HttpVersion::HTTP_2_0;
+        case 3000:
+            return HttpVersion::HTTP_3_0;
+        default:
+            return static_cast<HttpVersion>(version);
+    }
+}
+
 } // namespace detail
 
 RequestLineParser::RequestLineParser(const HttpServerOptions &options) : options_(&options) {}
@@ -149,19 +166,24 @@ RequestLineParser::RequestLineParser(const HttpServerOptions &options) : options
 void RequestLineParser::reset() {
     state_ = State::Start;
     line_ = RequestLineState{};
-    buf_start_ = nullptr;
 }
 
-void RequestLineParser::replace_buf_ptr(std::uint8_t *new_buf_start) {
-    if (!new_buf_start) {
-        return;
+
+ParseCode RequestLineParser::replace_buf_ptr(BufChain *old_chain, BufChain *new_chain) noexcept {
+    FIBER_ASSERT(state_ != State::Start);
+    FIBER_ASSERT(old_chain->pos > line_.request_start && old_chain->start <= line_.request_start);
+    std::uint8_t *new_buf_start = new_chain->pos;
+    std::uint8_t *old = line_.request_start;
+    auto length = old_chain->pos - old;
+    if (new_chain->writable() < length) {
+        return ParseCode::HeaderTooLarge;
     }
-    if (!buf_start_) {
-        buf_start_ = new_buf_start;
-        return;
-    }
-    auto delta = new_buf_start - buf_start_;
-    auto shift = [&](std::uint8_t *&ptr) {
+    FIBER_ASSERT(length > 0);
+    ::memcpy(new_buf_start, old, length);
+    new_chain->pos += length;
+    new_chain->last = new_chain->pos;
+    auto delta = new_buf_start - old;
+    auto shift = [=](std::uint8_t *&ptr) {
         if (ptr) {
             ptr += delta;
         }
@@ -178,15 +200,12 @@ void RequestLineParser::replace_buf_ptr(std::uint8_t *new_buf_start) {
     shift(line_.host_start);
     shift(line_.host_end);
     shift(line_.http_protocol_start);
-    buf_start_ = new_buf_start;
+    return ParseCode::Ok;
 }
 
 ParseCode RequestLineParser::execute(fiber::http::BufChain *buffer) {
     if (buffer->readable() == 0) {
         return ParseCode::Again;
-    }
-    if (!buf_start_) {
-        buf_start_ = buffer->start;
     }
 
     auto *p = buffer->pos;
@@ -685,18 +704,22 @@ HeaderLineParser::HeaderLineParser(const HttpServerOptions &options) : options_(
 void HeaderLineParser::reset() {
     state_ = State::Start;
     line_ = HeaderLineState{};
-    buf_start_ = nullptr;
 }
 
-void HeaderLineParser::replace_buf_ptr(std::uint8_t *new_buf_start) {
-    if (!new_buf_start) {
-        return;
+ParseCode HeaderLineParser::replace_buf_ptr(BufChain *old_chain, BufChain *new_chain) noexcept {
+    FIBER_ASSERT(state_ != State::Start);
+    FIBER_ASSERT(old_chain->pos > line_.header_name_start && old_chain->start <= line_.header_name_start);
+    std::uint8_t *new_buf_start = new_chain->pos;
+    std::uint8_t *old = line_.header_name_start;
+    auto length = old_chain->pos - old;
+    if (new_chain->writable() < length) {
+        return ParseCode::HeaderTooLarge;
     }
-    if (!buf_start_) {
-        buf_start_ = new_buf_start;
-        return;
-    }
-    auto delta = new_buf_start - buf_start_;
+    FIBER_ASSERT(length > 0);
+    ::memcpy(new_buf_start, old, length);
+    new_chain->pos += length;
+    new_chain->last = new_chain->pos;
+    auto delta = new_buf_start - old;
     auto shift = [=](std::uint8_t *&ptr) {
         if (ptr) {
             ptr += delta;
@@ -706,15 +729,28 @@ void HeaderLineParser::replace_buf_ptr(std::uint8_t *new_buf_start) {
     shift(line_.header_name_end);
     shift(line_.header_start);
     shift(line_.header_end);
-    buf_start_ = new_buf_start;
+    return ParseCode::Ok;
+}
+
+
+bool HeaderLineParser::header_view(std::string_view &name, std::string_view &value) const noexcept {
+    if (!line_.header_name_start || !line_.header_name_end || line_.header_name_end < line_.header_name_start) {
+        return false;
+    }
+    size_t name_len = static_cast<size_t>(line_.header_name_end - line_.header_name_start);
+    name = std::string_view(reinterpret_cast<char *>(line_.header_name_start), name_len);
+    if (line_.header_start && line_.header_end && line_.header_end >= line_.header_start) {
+        size_t value_len = static_cast<size_t>(line_.header_end - line_.header_start);
+        value = std::string_view(reinterpret_cast<char *>(line_.header_start), value_len);
+    } else {
+        value = {};
+    }
+    return true;
 }
 
 ParseCode HeaderLineParser::execute(BufChain *buffer) {
     if (buffer->readable() == 0) {
         return ParseCode::Again;
-    }
-    if (!buf_start_) {
-        buf_start_ = buffer->start;
     }
 
     for (;;) {
@@ -727,7 +763,12 @@ ParseCode HeaderLineParser::execute(BufChain *buffer) {
             unsigned char c;
             switch (state) {
                 case State::Start:
+                    hash = 0;
+                    i = 0;
                     line_.header_name_start = p;
+                    line_.header_name_end = nullptr;
+                    line_.header_start = nullptr;
+                    line_.header_end = nullptr;
                     line_.invalid_header = false;
                     switch (ch) {
                         case '\r':
@@ -895,10 +936,7 @@ ParseCode HeaderLineParser::execute(BufChain *buffer) {
         state_ = State::Start;
         line_.header_hash = hash;
         line_.lowcase_index = i;
-
-
-        state_ = State::Start;
-        continue;
+        return ParseCode::Ok;
 
     header_done:
         buffer->pos = p + 1;
