@@ -79,7 +79,6 @@ BufPool::~BufPool() {
     Block *block = head_;
     while (block) {
         Block *next = block->next;
-        std::free(block->data);
         std::free(block);
         block = next;
     }
@@ -162,7 +161,7 @@ void BufPool::reset() {
 }
 
 BufPool::Block *BufPool::allocate_block(size_t size) {
-    Block *block = static_cast<Block *>(system_alloc(block_size_, alignof(Block)));
+    auto *block = static_cast<Block *>(system_alloc(block_size_, alignof(Block)));
     if (!block) {
         return nullptr;
     }
