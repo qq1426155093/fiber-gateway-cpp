@@ -288,11 +288,7 @@ fiber::async::Task<common::IoResult<void>> Http1Connection::send_response_header
 
     std::string response;
     response.reserve(256 + exchange.response_headers_.size() * 32);
-    std::string_view version = exchange.version();
-    if (version.empty()) {
-        version = "HTTP/1.1";
-    }
-    response.append(version);
+    response.append("HTTP/1.1");
     response.push_back(' ');
     response.append(std::to_string(status));
     response.push_back(' ');

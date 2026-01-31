@@ -14,8 +14,8 @@
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
 #include "../common/mem/BufPool.h"
-#include "HttpCommon.h"
 #include "Http1Parser.h"
+#include "HttpCommon.h"
 #include "HttpHeaders.h"
 #include "TlsOptions.h"
 
@@ -45,9 +45,11 @@ class BodyParser;
 
 class HttpExchange : public common::NonCopyable, public common::NonMovable {
 public:
-    std::string_view method() const noexcept;
-    std::string_view target() const noexcept;
-    std::string_view version() const noexcept;
+    [[nodiscard]] HttpMethod method() const noexcept { return method_; }
+    [[nodiscard]] HttpVersion version() const noexcept { return version_; }
+    [[nodiscard]] const HttpUri &uri() const noexcept { return uri_; }
+    std::string_view version_view() const noexcept { return version_view_; }
+    std::string_view method_view() const noexcept { return method_view_; }
     std::string_view header(std::string_view name) const noexcept;
     const HttpHeaders &request_headers() const noexcept;
     HttpHeaders &response_headers() noexcept;

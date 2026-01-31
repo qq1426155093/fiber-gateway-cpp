@@ -42,18 +42,6 @@ void HttpExchange::reset() {
     body_parser_.reset();
 }
 
-std::string_view HttpExchange::method() const noexcept {
-    return method_view_;
-}
-
-std::string_view HttpExchange::target() const noexcept {
-    return uri_.unparsed_uri;
-}
-
-std::string_view HttpExchange::version() const noexcept {
-    return version_view_;
-}
-
 std::string_view HttpExchange::header(std::string_view name) const noexcept {
     return request_headers_.get(name);
 }
