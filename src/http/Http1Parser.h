@@ -14,7 +14,6 @@
 namespace fiber::http {
 
 struct HttpServerOptions;
-class HttpExchange;
 
 enum class ParseCode : int {
     Ok = 0,
@@ -29,10 +28,9 @@ enum class ParseCode : int {
     HeaderDone = -15,
 };
 
-
 class RequestLineParser : public common::NonCopyable, public common::NonMovable {
 public:
-    RequestLineParser(HttpExchange &exchange, const HttpServerOptions &options);
+    RequestLineParser(const HttpServerOptions &options);
 
     void reset();
 
@@ -95,7 +93,6 @@ public:
 private:
     static constexpr size_t kInvalidPos = std::numeric_limits<size_t>::max();
 
-    HttpExchange *exchange_ = nullptr;
     const HttpServerOptions *options_ = nullptr;
     State state_ = State::Start;
     RequestLineState line_{};
@@ -104,7 +101,7 @@ private:
 
 class HeaderLineParser : public common::NonCopyable, public common::NonMovable {
 public:
-    HeaderLineParser(HttpExchange &exchange, const HttpServerOptions &options);
+    HeaderLineParser(const HttpServerOptions &options);
 
     void reset();
 
@@ -112,9 +109,6 @@ public:
     // replace the pointers in HeaderLineState.
     // the content was copied to the new_buf_start pointer because the limit of the old memory capacity.
     void replace_buf_ptr(std::uint8_t *new_buf_start);
-
-    [[nodiscard]] bool connection_close() const noexcept { return connection_close_; }
-    [[nodiscard]] bool connection_keep_alive() const noexcept { return connection_keep_alive_; }
 
     enum class State {
         Start,
@@ -143,12 +137,9 @@ public:
 private:
     static constexpr size_t kInvalidPos = std::numeric_limits<size_t>::max();
 
-    HttpExchange *exchange_ = nullptr;
     const HttpServerOptions *options_ = nullptr;
     State state_ = State::Start;
     HeaderLineState line_{};
-    bool connection_close_ = false;
-    bool connection_keep_alive_ = false;
     std::uint8_t *buf_start_ = nullptr;
 };
 

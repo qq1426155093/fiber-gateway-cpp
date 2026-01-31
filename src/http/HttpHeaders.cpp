@@ -3,22 +3,22 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <string>
 
 namespace fiber::http {
 
 namespace {
 
 uint64_t hash_name(std::string_view name) {
-    uint64_t hash = 14695981039346656037ull;
+    uint32_t hash = 0;
     for (char ch : name) {
         unsigned char lower = static_cast<unsigned char>(ch);
         if (lower >= 'A' && lower <= 'Z') {
             lower = static_cast<unsigned char>(lower - 'A' + 'a');
         }
-        hash ^= lower;
-        hash *= 1099511628211ull;
+        hash = hash * 31 + lower;
     }
-    return hash;
+    return static_cast<uint64_t>(hash);
 }
 
 bool equals_ascii_ci(std::string_view a, std::string_view b) {
@@ -57,6 +57,20 @@ size_t next_pow2(size_t value) {
     return value + 1;
 }
 
+void to_lowcase_and_hash(std::string_view name, std::string &out, uint64_t &hash_out) {
+    out.resize(name.size());
+    uint32_t hash = 0;
+    for (size_t i = 0; i < name.size(); ++i) {
+        unsigned char lower = static_cast<unsigned char>(name[i]);
+        if (lower >= 'A' && lower <= 'Z') {
+            lower = static_cast<unsigned char>(lower - 'A' + 'a');
+        }
+        out[i] = static_cast<char>(lower);
+        hash = hash * 31 + lower;
+    }
+    hash_out = static_cast<uint64_t>(hash);
+}
+
 } // namespace
 
 HttpHeaders::HttpHeaders(mem::BufPool &pool)
@@ -80,6 +94,11 @@ bool HttpHeaders::add(std::string_view name, std::string_view value) {
     if (!ok) {
         return false;
     }
+    uint64_t hash = 0;
+    const char *lowcase_ptr = copy_lowercase_to_pool(name, hash, ok);
+    if (!ok) {
+        return false;
+    }
     const char *value_ptr = copy_to_pool(value, ok);
     if (!ok) {
         return false;
@@ -88,9 +107,60 @@ bool HttpHeaders::add(std::string_view name, std::string_view value) {
     HeaderField field{};
     field.name = name_ptr;
     field.name_len = static_cast<uint32_t>(name.size());
+    field.lowcase_name = lowcase_ptr;
+    field.lowcase_len = static_cast<uint32_t>(name.size());
     field.value = value_ptr;
     field.value_len = static_cast<uint32_t>(value.size());
-    field.name_hash = hash_name(name);
+    field.name_hash = hash;
+    field.next = kInvalidIndex;
+
+    uint32_t index = static_cast<uint32_t>(fields_.size());
+    fields_.push_back(field);
+
+    uint32_t bucket = static_cast<uint32_t>(field.name_hash & (bucket_head_.size() - 1));
+    if (bucket_head_[bucket] == kInvalidIndex) {
+        bucket_head_[bucket] = index;
+        bucket_tail_[bucket] = index;
+    } else {
+        uint32_t tail = bucket_tail_[bucket];
+        fields_[tail].next = index;
+        bucket_tail_[bucket] = index;
+    }
+    return true;
+}
+
+bool HttpHeaders::add(std::string_view name, std::string_view value, std::string_view lowcase_name, uint64_t hash) {
+    if (!ensure_buckets() || !pool_) {
+        return false;
+    }
+    if (name.size() > std::numeric_limits<uint32_t>::max() ||
+        value.size() > std::numeric_limits<uint32_t>::max() ||
+        lowcase_name.size() > std::numeric_limits<uint32_t>::max()) {
+        return false;
+    }
+
+    bool ok = true;
+    const char *name_ptr = copy_to_pool(name, ok);
+    if (!ok) {
+        return false;
+    }
+    const char *lowcase_ptr = copy_to_pool(lowcase_name, ok);
+    if (!ok) {
+        return false;
+    }
+    const char *value_ptr = copy_to_pool(value, ok);
+    if (!ok) {
+        return false;
+    }
+
+    HeaderField field{};
+    field.name = name_ptr;
+    field.name_len = static_cast<uint32_t>(name.size());
+    field.lowcase_name = lowcase_ptr;
+    field.lowcase_len = static_cast<uint32_t>(lowcase_name.size());
+    field.value = value_ptr;
+    field.value_len = static_cast<uint32_t>(value.size());
+    field.name_hash = hash;
     field.next = kInvalidIndex;
 
     uint32_t index = static_cast<uint32_t>(fields_.size());
@@ -113,6 +183,11 @@ bool HttpHeaders::set(std::string_view name, std::string_view value) {
     return add(name, value);
 }
 
+bool HttpHeaders::set(std::string_view name, std::string_view value, std::string_view lowcase_name, uint64_t hash) {
+    remove_lowcase(lowcase_name, hash);
+    return add(name, value, lowcase_name, hash);
+}
+
 std::string_view HttpHeaders::get(std::string_view name) const noexcept {
     uint32_t index = find_first_index(name);
     if (index == kInvalidIndex) {
@@ -123,6 +198,18 @@ std::string_view HttpHeaders::get(std::string_view name) const noexcept {
 
 bool HttpHeaders::contains(std::string_view name) const noexcept {
     return find_first_index(name) != kInvalidIndex;
+}
+
+HttpHeaders::MatchRange HttpHeaders::get_all(std::string_view lowcase_key, uint64_t hash) const noexcept {
+    return MatchRange(this, lowcase_key, hash);
+}
+
+HttpHeaders::MatchRange HttpHeaders::get_all(std::string_view name) const {
+    MatchRange range;
+    range.headers_ = this;
+    to_lowcase_and_hash(name, range.owned_key_, range.hash_);
+    range.key_ = range.owned_key_;
+    return range;
 }
 
 size_t HttpHeaders::remove(std::string_view name) noexcept {
@@ -136,6 +223,32 @@ size_t HttpHeaders::remove(std::string_view name) noexcept {
         const auto &field = fields_[i];
         if (field.name_hash == name_hash &&
             equals_ascii_ci(field.name_view(), name)) {
+            ++removed;
+            continue;
+        }
+        if (out != i) {
+            fields_[out] = field;
+        }
+        ++out;
+    }
+    if (removed == 0) {
+        return 0;
+    }
+    fields_.resize(out);
+    rebuild_buckets();
+    return removed;
+}
+
+size_t HttpHeaders::remove_lowcase(std::string_view lowcase_key, uint64_t hash) noexcept {
+    if (fields_.empty()) {
+        return 0;
+    }
+    size_t removed = 0;
+    size_t out = 0;
+    for (size_t i = 0; i < fields_.size(); ++i) {
+        const auto &field = fields_[i];
+        if (field.name_hash == hash &&
+            field.lowcase_view() == lowcase_key) {
             ++removed;
             continue;
         }
@@ -250,6 +363,39 @@ uint32_t HttpHeaders::find_first_index(std::string_view name) const noexcept {
     return kInvalidIndex;
 }
 
+uint32_t HttpHeaders::find_first_index_lowcase(std::string_view lowcase_key, uint64_t hash) const noexcept {
+    if (bucket_head_.empty()) {
+        return kInvalidIndex;
+    }
+    uint32_t bucket = static_cast<uint32_t>(hash & (bucket_head_.size() - 1));
+    uint32_t index = bucket_head_[bucket];
+    while (index != kInvalidIndex) {
+        const auto &field = fields_[index];
+        if (field.name_hash == hash &&
+            field.lowcase_view() == lowcase_key) {
+            return index;
+        }
+        index = field.next;
+    }
+    return kInvalidIndex;
+}
+
+uint32_t HttpHeaders::next_match_index(uint32_t start, std::string_view lowcase_key, uint64_t hash) const noexcept {
+    if (start == kInvalidIndex) {
+        return kInvalidIndex;
+    }
+    uint32_t index = fields_[start].next;
+    while (index != kInvalidIndex) {
+        const auto &field = fields_[index];
+        if (field.name_hash == hash &&
+            field.lowcase_view() == lowcase_key) {
+            return index;
+        }
+        index = field.next;
+    }
+    return kInvalidIndex;
+}
+
 const char *HttpHeaders::copy_to_pool(std::string_view data, bool &ok) {
     if (data.empty()) {
         return "";
@@ -264,6 +410,29 @@ const char *HttpHeaders::copy_to_pool(std::string_view data, bool &ok) {
         return nullptr;
     }
     std::memcpy(ptr, data.data(), data.size());
+    return ptr;
+}
+
+const char *HttpHeaders::copy_lowercase_to_pool(std::string_view data, uint64_t &hash, bool &ok) {
+    uint32_t local_hash = 0;
+    if (data.empty()) {
+        hash = 0;
+        return "";
+    }
+    char *ptr = static_cast<char *>(pool_->alloc(data.size(), alignof(char)));
+    if (!ptr) {
+        ok = false;
+        return nullptr;
+    }
+    for (size_t i = 0; i < data.size(); ++i) {
+        unsigned char lower = static_cast<unsigned char>(data[i]);
+        if (lower >= 'A' && lower <= 'Z') {
+            lower = static_cast<unsigned char>(lower - 'A' + 'a');
+        }
+        ptr[i] = static_cast<char>(lower);
+        local_hash = local_hash * 31 + lower;
+    }
+    hash = static_cast<uint64_t>(local_hash);
     return ptr;
 }
 

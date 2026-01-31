@@ -1,36 +1,28 @@
 #include "Http1Parser.h"
-#include "HttpExchange.h"
 #include <string_view>
+#include "HttpExchange.h"
 
 namespace fiber::http {
 
 namespace detail {
 
-static constexpr uint32_t kUsual[8] = {
-    0x00000000u,
-    0x7fff37d6u,
+static constexpr uint32_t kUsual[8] = {0x00000000u, 0x7fff37d6u,
 #if defined(_WIN32)
-    0xefffffffu,
+                                       0xefffffffu,
 #else
-    0xffffffffu,
+                                       0xffffffffu,
 #endif
-    0x7fffffffu,
-    0xffffffffu,
-    0xffffffffu,
-    0xffffffffu,
-    0xffffffffu
-};
+                                       0x7fffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu, 0xffffffffu};
 
-static const unsigned char kLowcase[] =
-    "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-    "\0\0\0\0\0\0\0\0\0\0\0\0\0-\0\0"
-    "0123456789\0\0\0\0\0\0"
-    "\0abcdefghijklmnopqrstuvwxyz\0\0\0\0\0"
-    "\0abcdefghijklmnopqrstuvwxyz\0\0\0\0\0"
-    "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-    "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-    "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
-    "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
+static const unsigned char kLowcase[] = "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                                        "\0\0\0\0\0\0\0\0\0\0\0\0\0-\0\0"
+                                        "0123456789\0\0\0\0\0\0"
+                                        "\0abcdefghijklmnopqrstuvwxyz\0\0\0\0\0"
+                                        "\0abcdefghijklmnopqrstuvwxyz\0\0\0\0\0"
+                                        "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                                        "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                                        "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
+                                        "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0";
 
 unsigned char ascii_lower(unsigned char ch) {
     if (ch >= 'A' && ch <= 'Z') {
@@ -44,8 +36,7 @@ bool equals_ascii_ci(std::string_view a, std::string_view b) {
         return false;
     }
     for (size_t i = 0; i < a.size(); ++i) {
-        if (ascii_lower(static_cast<unsigned char>(a[i])) !=
-            ascii_lower(static_cast<unsigned char>(b[i]))) {
+        if (ascii_lower(static_cast<unsigned char>(a[i])) != ascii_lower(static_cast<unsigned char>(b[i]))) {
             return false;
         }
     }
@@ -126,24 +117,22 @@ HttpMethod parse_method(const std::uint8_t *m, size_t len) {
             }
             break;
         case 7:
-            if (m[0] == 'O' && m[1] == 'P' && m[2] == 'T' && m[3] == 'I' && m[4] == 'O' &&
-                m[5] == 'N' && m[6] == 'S') {
+            if (m[0] == 'O' && m[1] == 'P' && m[2] == 'T' && m[3] == 'I' && m[4] == 'O' && m[5] == 'N' && m[6] == 'S') {
                 return HttpMethod::Options;
             }
-            if (m[0] == 'C' && m[1] == 'O' && m[2] == 'N' && m[3] == 'N' && m[4] == 'E' &&
-                m[5] == 'C' && m[6] == 'T') {
+            if (m[0] == 'C' && m[1] == 'O' && m[2] == 'N' && m[3] == 'N' && m[4] == 'E' && m[5] == 'C' && m[6] == 'T') {
                 return HttpMethod::Connect;
             }
             break;
         case 8:
-            if (m[0] == 'P' && m[1] == 'R' && m[2] == 'O' && m[3] == 'P' && m[4] == 'F' &&
-                m[5] == 'I' && m[6] == 'N' && m[7] == 'D') {
+            if (m[0] == 'P' && m[1] == 'R' && m[2] == 'O' && m[3] == 'P' && m[4] == 'F' && m[5] == 'I' && m[6] == 'N' &&
+                m[7] == 'D') {
                 return HttpMethod::PropFind;
             }
             break;
         case 9:
-            if (m[0] == 'P' && m[1] == 'R' && m[2] == 'O' && m[3] == 'P' && m[4] == 'P' &&
-                m[5] == 'A' && m[6] == 'T' && m[7] == 'C' && m[8] == 'H') {
+            if (m[0] == 'P' && m[1] == 'R' && m[2] == 'O' && m[3] == 'P' && m[4] == 'P' && m[5] == 'A' && m[6] == 'T' &&
+                m[7] == 'C' && m[8] == 'H') {
                 return HttpMethod::PropPatch;
             }
             break;
@@ -155,8 +144,7 @@ HttpMethod parse_method(const std::uint8_t *m, size_t len) {
 
 } // namespace detail
 
-RequestLineParser::RequestLineParser(HttpExchange &exchange, const HttpServerOptions &options)
-    : exchange_(&exchange), options_(&options) {}
+RequestLineParser::RequestLineParser(const HttpServerOptions &options) : options_(&options) {}
 
 void RequestLineParser::reset() {
     state_ = State::Start;
@@ -689,62 +677,14 @@ done:
         return ParseCode::InvalidRequest;
     }
 
-    size_t method_len = static_cast<size_t>(line_.method_end - line_.request_start + 1);
-    size_t uri_len = static_cast<size_t>(line_.uri_end - line_.uri_start);
-    exchange_->method_view_ = std::string_view(reinterpret_cast<char *>(line_.request_start), method_len);
-    exchange_->method_ = line_.method;
-    exchange_->uri_.unparsed_uri = std::string_view(reinterpret_cast<char *>(line_.uri_start), uri_len);
-
-    exchange_->version_ = static_cast<HttpVersion>(line_.http_version);
-    if (line_.http_protocol_start && line_.request_end &&
-        line_.request_end >= line_.http_protocol_start) {
-        size_t version_len = static_cast<size_t>(line_.request_end - line_.http_protocol_start + 1);
-        exchange_->version_view_ =
-            std::string_view(reinterpret_cast<char *>(line_.http_protocol_start), version_len);
-    } else if (line_.http_version == 9) {
-        exchange_->version_view_ = "HTTP/0.9";
-    } else {
-        exchange_->version_view_ = {};
-    }
-
-    const std::uint8_t *path_end = line_.uri_end;
-    if (line_.args_start && line_.args_start <= line_.uri_end) {
-        if (line_.args_start > line_.uri_start) {
-            path_end = line_.args_start - 1;
-        } else {
-            path_end = line_.uri_start;
-        }
-        exchange_->uri_.query = std::string_view(reinterpret_cast<char *>(line_.args_start),
-                                                  static_cast<size_t>(line_.uri_end - line_.args_start));
-    } else {
-        exchange_->uri_.query = {};
-    }
-
-    if (path_end > line_.uri_start) {
-        exchange_->uri_.path = std::string_view(reinterpret_cast<char *>(line_.uri_start),
-                                                static_cast<size_t>(path_end - line_.uri_start));
-    } else {
-        exchange_->uri_.path = {};
-    }
-
-    if (line_.uri_ext && line_.uri_ext >= line_.uri_start && line_.uri_ext < path_end) {
-        exchange_->uri_.exten = std::string_view(reinterpret_cast<char *>(line_.uri_ext),
-                                                 static_cast<size_t>(path_end - line_.uri_ext));
-    } else {
-        exchange_->uri_.exten = {};
-    }
-
     return ParseCode::Ok;
 }
 
-HeaderLineParser::HeaderLineParser(HttpExchange &exchange, const HttpServerOptions &options)
-    : exchange_(&exchange), options_(&options) {}
+HeaderLineParser::HeaderLineParser(const HttpServerOptions &options) : options_(&options) {}
 
 void HeaderLineParser::reset() {
     state_ = State::Start;
     line_ = HeaderLineState{};
-    connection_close_ = false;
-    connection_keep_alive_ = false;
     buf_start_ = nullptr;
 }
 
@@ -770,7 +710,7 @@ void HeaderLineParser::replace_buf_ptr(std::uint8_t *new_buf_start) {
 }
 
 ParseCode HeaderLineParser::execute(BufChain *buffer) {
-    if (!exchange_ || !buffer || !buffer->pos || buffer->pos >= buffer->last) {
+    if (buffer->readable() == 0) {
         return ParseCode::Again;
     }
     if (!buf_start_) {
@@ -950,38 +890,17 @@ ParseCode HeaderLineParser::execute(BufChain *buffer) {
         line_.lowcase_index = i;
         return ParseCode::Again;
 
-done:
+    done:
         buffer->pos = p + 1;
         state_ = State::Start;
         line_.header_hash = hash;
         line_.lowcase_index = i;
 
-        if (line_.header_name_start && line_.header_name_end &&
-            line_.header_name_end >= line_.header_name_start) {
-            size_t name_len = static_cast<size_t>(line_.header_name_end - line_.header_name_start);
-            std::string_view name(reinterpret_cast<char *>(line_.header_name_start), name_len);
-            std::string_view value;
-            if (line_.header_start && line_.header_end && line_.header_end >= line_.header_start) {
-                size_t value_len = static_cast<size_t>(line_.header_end - line_.header_start);
-                value = std::string_view(reinterpret_cast<char *>(line_.header_start), value_len);
-            }
-            if (!exchange_->request_headers_.add(name, value)) {
-                return ParseCode::Error;
-            }
-            if (detail::equals_ascii_ci(name, "connection")) {
-                if (detail::has_token(value, "close")) {
-                    connection_close_ = true;
-                }
-                if (detail::has_token(value, "keep-alive")) {
-                    connection_keep_alive_ = true;
-                }
-            }
-        }
 
         state_ = State::Start;
         continue;
 
-header_done:
+    header_done:
         buffer->pos = p + 1;
         state_ = State::Start;
         return ParseCode::HeaderDone;
