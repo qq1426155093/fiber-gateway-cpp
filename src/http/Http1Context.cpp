@@ -4,20 +4,6 @@
 
 namespace fiber::http {
 
-namespace {
-
-void to_lowercase(std::string_view name, char *dst) {
-    for (size_t i = 0; i < name.size(); ++i) {
-        unsigned char lower = static_cast<unsigned char>(name[i]);
-        if (lower >= 'A' && lower <= 'Z') {
-            lower = static_cast<unsigned char>(lower - 'A' + 'a');
-        }
-        dst[i] = static_cast<char>(lower);
-    }
-}
-
-} // namespace
-
 Http1Context::Http1Context(HttpTransport &transport, const HttpServerOptions &options) :
     header_bufs_(HeaderBuffers::Opt{options.header_init_size, options.header_large_size, options.header_large_num}),
     header_pool_(options.header_init_size), transport_(&transport), options_(options) {}
@@ -157,8 +143,9 @@ fiber::async::Task<fiber::common::IoResult<ParseCode>> Http1Context::parse_reque
             if (chain->readable() > 0) {
                 exchange.header_adjacent_body_ = chain;
             }
-            co_return code;
+            co_return ParseCode::Ok;
         }
+        co_return ParseCode::Error;
     }
 }
 

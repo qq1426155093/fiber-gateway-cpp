@@ -74,7 +74,7 @@ void to_lowcase_and_hash(std::string_view name, std::string &out, uint64_t &hash
 void init_field(HttpHeaders::HeaderField *field,
                 const char *name_ptr,
                 uint32_t name_len,
-                char *lowcase_ptr,
+                const char *lowcase_ptr,
                 const char *value_ptr,
                 uint32_t value_len,
                 uint64_t hash) {
@@ -97,7 +97,7 @@ HttpHeaders::HttpHeaders(mem::BufPool &pool)
 }
 
 HttpHeaders::HeaderField *HttpHeaders::add(std::string_view name, std::string_view value) {
-    if (!ensure_buckets() || !pool_) {
+    if (!ensure_buckets()) {
         return nullptr;
     }
     if (name.size() > std::numeric_limits<uint32_t>::max() ||
@@ -105,39 +105,33 @@ HttpHeaders::HeaderField *HttpHeaders::add(std::string_view name, std::string_vi
         return nullptr;
     }
 
-    bool ok = true;
-    const char *name_ptr = copy_to_pool(name, ok);
-    if (!ok) {
+    const char *name_ptr = copy_to_pool(name);
+    if (!name_ptr) {
         return nullptr;
     }
     uint64_t hash = 0;
-    const char *lowcase_ptr = copy_lowercase_to_pool(name, hash, ok);
-    if (!ok) {
+    const char *lowcase_ptr = copy_lowercase_to_pool(name, hash);
+    if (!lowcase_ptr) {
         return nullptr;
     }
-    const char *value_ptr = copy_to_pool(value, ok);
-    if (!ok) {
+    const char *value_ptr = copy_to_pool(value);
+    if (!value_ptr) {
         return nullptr;
     }
-    HeaderField *field = alloc_field(ok);
-    if (!ok) {
+    HeaderField *field = alloc_field();
+    if (!field) {
         return nullptr;
     }
 
-    init_field(field,
-               name_ptr,
-               static_cast<uint32_t>(name.size()),
-               lowcase_ptr,
-               static_cast<uint32_t>(name.size()),
-               value_ptr,
-               static_cast<uint32_t>(value.size()),
-               hash);
+    const uint32_t name_len = static_cast<uint32_t>(name.size());
+    const uint32_t value_len = static_cast<uint32_t>(value.size());
+    init_field(field, name_ptr, name_len, lowcase_ptr, value_ptr, value_len, hash);
     return link_field(field);
 }
 
 HttpHeaders::HeaderField *HttpHeaders::add(std::string_view name, std::string_view value,
                                            char *lowcase_name, uint64_t hash) {
-    if (!ensure_buckets() || !pool_) {
+    if (!ensure_buckets()) {
         return nullptr;
     }
     if (name.size() > std::numeric_limits<uint32_t>::max() ||
@@ -145,30 +139,34 @@ HttpHeaders::HeaderField *HttpHeaders::add(std::string_view name, std::string_vi
         return nullptr;
     }
 
-    bool ok = true;
-    const char *name_ptr = copy_to_pool(name, ok);
-    if (!ok) {
+    const char *name_ptr = copy_to_pool(name);
+    if (!name_ptr) {
         return nullptr;
     }
-    const char *lowcase_ptr = copy_to_pool(std::string_view(lowcase_name, name.size()), ok);
-    if (!ok) {
+    const uint32_t name_len = static_cast<uint32_t>(name.size());
+    const char *lowcase_ptr = "";
+    if (name_len > 0) {
+        lowcase_ptr = copy_to_pool(std::string_view(lowcase_name, name_len));
+        if (!lowcase_ptr) {
+            return nullptr;
+        }
+    }
+    const char *value_ptr = copy_to_pool(value);
+    if (!value_ptr) {
         return nullptr;
     }
-    const char *value_ptr = copy_to_pool(value, ok);
-    if (!ok) {
-        return nullptr;
-    }
-    HeaderField *field = alloc_field(ok);
-    if (!ok) {
+    const uint32_t value_len = static_cast<uint32_t>(value.size());
+    HeaderField *field = alloc_field();
+    if (!field) {
         return nullptr;
     }
 
     init_field(field,
                name_ptr,
-               static_cast<uint32_t>(name.size()),
-               const_cast<char *>(lowcase_ptr),
+               name_len,
+               lowcase_ptr,
                value_ptr,
-               static_cast<uint32_t>(value.size()),
+               value_len,
                hash);
     return link_field(field);
 }
@@ -180,7 +178,9 @@ HttpHeaders::HeaderField *HttpHeaders::set(std::string_view name, std::string_vi
 
 HttpHeaders::HeaderField *HttpHeaders::set(std::string_view name, std::string_view value,
                                            char *lowcase_name, uint64_t hash) {
-    remove_lowcase(std::string_view(lowcase_name, name.size()), hash);
+    const uint32_t name_len = static_cast<uint32_t>(name.size());
+    const char *lowcase_ptr = name_len == 0 ? "" : lowcase_name;
+    remove_lowcase(std::string_view(lowcase_ptr, name_len), hash);
     return add(name, value, lowcase_name, hash);
 }
 
@@ -193,21 +193,16 @@ HttpHeaders::HeaderField *HttpHeaders::add_view(std::string_view name, std::stri
         return nullptr;
     }
     uint64_t hash = hash_name(name);
-    HeaderField *field = nullptr;
-    bool ok = true;
-    field = alloc_field(ok);
-    if (!ok) {
+    HeaderField *field = alloc_field();
+    if (!field) {
         return nullptr;
     }
 
-    init_field(field,
-               name.data(),
-               static_cast<uint32_t>(name.size()),
-               name.data(),
-               static_cast<uint32_t>(name.size()),
-               value.data(),
-               static_cast<uint32_t>(value.size()),
-               hash);
+    const uint32_t name_len = static_cast<uint32_t>(name.size());
+    const uint32_t value_len = static_cast<uint32_t>(value.size());
+    const char *name_ptr = name_len == 0 ? "" : name.data();
+    const char *value_ptr = value_len == 0 ? "" : value.data();
+    init_field(field, name_ptr, name_len, name_ptr, value_ptr, value_len, hash);
     return link_field(field);
 }
 
@@ -221,19 +216,17 @@ HttpHeaders::HeaderField *HttpHeaders::add_view(std::string_view name, std::stri
         return nullptr;
     }
 
-    bool ok = true;
-    HeaderField *field = alloc_field(ok);
-    if (!ok) {
+    HeaderField *field = alloc_field();
+    if (!field) {
         return nullptr;
     }
 
-    init_field(field,
-               name.data(),
-               static_cast<uint32_t>(name.size()),
-               lowcase_name,
-               value.data(),
-               static_cast<uint32_t>(value.size()),
-               hash);
+    const uint32_t name_len = static_cast<uint32_t>(name.size());
+    const uint32_t value_len = static_cast<uint32_t>(value.size());
+    const char *name_ptr = name_len == 0 ? "" : name.data();
+    const char *value_ptr = value_len == 0 ? "" : value.data();
+    const char *lowcase_ptr = name_len == 0 ? "" : lowcase_name;
+    init_field(field, name_ptr, name_len, lowcase_ptr, value_ptr, value_len, hash);
     return link_field(field);
 }
 
@@ -244,7 +237,9 @@ HttpHeaders::HeaderField *HttpHeaders::set_view(std::string_view name, std::stri
 
 HttpHeaders::HeaderField *HttpHeaders::set_view(std::string_view name, std::string_view value,
                                                 char *lowcase_name, uint64_t hash) {
-    remove_lowcase(std::string_view(lowcase_name, name.size()), hash);
+    const uint32_t name_len = static_cast<uint32_t>(name.size());
+    const char *lowcase_ptr = name_len == 0 ? "" : lowcase_name;
+    remove_lowcase(std::string_view(lowcase_ptr, name_len), hash);
     return add_view(name, value, lowcase_name, hash);
 }
 
@@ -467,36 +462,27 @@ const HttpHeaders::HeaderField *HttpHeaders::next_match_node(const HeaderField *
     return nullptr;
 }
 
-const char *HttpHeaders::copy_to_pool(std::string_view data, bool &ok) {
+const char *HttpHeaders::copy_to_pool(std::string_view data) {
     if (data.empty()) {
         return "";
     }
-    if (!pool_) {
-        ok = false;
-        return nullptr;
-    }
     char *ptr = static_cast<char *>(pool_->alloc(data.size(), alignof(char)));
     if (!ptr) {
-        ok = false;
         return nullptr;
     }
     std::memcpy(ptr, data.data(), data.size());
     return ptr;
 }
 
-const char *HttpHeaders::copy_lowercase_to_pool(std::string_view data, uint64_t &hash, bool &ok) {
+const char *HttpHeaders::copy_lowercase_to_pool(std::string_view data, uint64_t &hash) {
     std::uint32_t local_hash = 0;
     if (data.empty()) {
         hash = 0;
         return "";
     }
-    if (!pool_) {
-        ok = false;
-        return nullptr;
-    }
     char *ptr = static_cast<char *>(pool_->alloc(data.size(), alignof(char)));
     if (!ptr) {
-        ok = false;
+        hash = 0;
         return nullptr;
     }
     for (size_t i = 0; i < data.size(); ++i) {
@@ -509,19 +495,6 @@ const char *HttpHeaders::copy_lowercase_to_pool(std::string_view data, uint64_t 
     }
     hash = static_cast<uint64_t>(local_hash);
     return ptr;
-}
-
-HttpHeaders::HeaderField *HttpHeaders::alloc_field(bool &ok) {
-    if (!pool_) {
-        ok = false;
-        return nullptr;
-    }
-    void *ptr = pool_->alloc(sizeof(HeaderField), alignof(HeaderField));
-    if (!ptr) {
-        ok = false;
-        return nullptr;
-    }
-    return static_cast<HeaderField *>(ptr);
 }
 
 HttpHeaders::HeaderField *HttpHeaders::link_field(HeaderField *field) noexcept {

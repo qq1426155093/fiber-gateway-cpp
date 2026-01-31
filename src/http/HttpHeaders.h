@@ -14,12 +14,22 @@
 
 namespace fiber::http {
 
+inline void to_lowercase(std::string_view name, char *dst) {
+    for (size_t i = 0; i < name.size(); ++i) {
+        unsigned char lower = static_cast<unsigned char>(name[i]);
+        if (lower >= 'A' && lower <= 'Z') {
+            lower = static_cast<unsigned char>(lower - 'A' + 'a');
+        }
+        dst[i] = static_cast<char>(lower);
+    }
+}
+
 class HttpHeaders : public common::NonCopyable, public common::NonMovable {
 public:
     struct HeaderField {
         const char *name = nullptr;
         uint32_t name_len = 0;
-        char *lowcase_name = nullptr;
+        const char *lowcase_name = nullptr;
         const char *value = nullptr;
         uint32_t value_len = 0;
         uint64_t name_hash = 0;
@@ -162,9 +172,11 @@ private:
     const HeaderField *next_match_node(const HeaderField *start, std::string_view lowcase_key,
                                        uint64_t hash) const noexcept;
     size_t remove_lowcase(std::string_view lowcase_key, uint64_t hash) noexcept;
-    const char *copy_to_pool(std::string_view data, bool &ok);
-    const char *copy_lowercase_to_pool(std::string_view data, uint64_t &hash, bool &ok);
-    HeaderField *alloc_field(bool &ok);
+    const char *copy_to_pool(std::string_view data);
+    const char *copy_lowercase_to_pool(std::string_view data, uint64_t &hash);
+    HeaderField *alloc_field() noexcept {
+        return static_cast<HeaderField *>(pool_->alloc(sizeof(HeaderField), alignof(HeaderField)));
+    }
     HeaderField *link_field(HeaderField *field) noexcept;
 
     mem::BufPool *pool_ = nullptr;
