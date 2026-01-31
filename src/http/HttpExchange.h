@@ -40,6 +40,7 @@ struct ReadBodyResult {
 
 class BodyParser;
 class Http1Context;
+class HttpTransport;
 
 
 class HttpExchange : public common::NonCopyable, public common::NonMovable {
@@ -91,8 +92,21 @@ private:
     size_t response_body_sent_ = 0;
     BufChain *header_adjacent_body_{};
 
-    std::string body_buffer_;
+    HttpTransport *transport_ = nullptr;
+    const HttpServerOptions *options_ = nullptr;
+    bool request_chunked_ = false;
+    bool request_content_length_set_ = false;
+    size_t request_content_length_ = 0;
+    size_t request_body_read_ = 0;
+    bool request_body_done_ = false;
+    bool request_close_ = false;
+    bool request_keep_alive_ = false;
+    size_t chunk_remaining_ = 0;
+    bool chunk_done_ = false;
+    bool body_buffer_primed_ = false;
+    size_t body_buffer_offset_ = 0;
 
+    std::string body_buffer_;
 
     BodyParser body_parser_{};
 };

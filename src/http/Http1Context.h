@@ -15,6 +15,9 @@
 
 namespace fiber::http {
 
+template <typename V>
+class HeaderMap;
+
 class Http1Context : public common::NonCopyable, public common::NonMovable {
 public:
     Http1Context(HttpTransport &transport, const HttpServerOptions &options);
@@ -25,6 +28,13 @@ public:
     const HttpServerOptions &options() const noexcept { return options_; }
 
 private:
+    using HeaderHandler = bool (*)(HttpExchange &exchange, std::string_view value);
+
+    static const HeaderMap<HeaderHandler> &header_handler_map();
+    static bool handle_content_length(HttpExchange &exchange, std::string_view value);
+    static bool handle_transfer_encoding(HttpExchange &exchange, std::string_view value);
+    static bool handle_connection(HttpExchange &exchange, std::string_view value);
+
     HeaderBuffers header_bufs_;
     mem::BufPool header_pool_;
     HttpTransport *transport_ = nullptr;

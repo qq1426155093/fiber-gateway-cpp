@@ -1,8 +1,131 @@
 #include "Http1Context.h"
 
+#include <charconv>
 #include <cstring>
+#include <limits>
+#include <system_error>
+
+#include "HeaderMap.h"
 
 namespace fiber::http {
+
+namespace {
+unsigned char ascii_lower(unsigned char ch) {
+    if (ch >= 'A' && ch <= 'Z') {
+        return static_cast<unsigned char>(ch + ('a' - 'A'));
+    }
+    return ch;
+}
+
+bool equals_ascii_ci(std::string_view a, std::string_view b) {
+    if (a.size() != b.size()) {
+        return false;
+    }
+    for (size_t i = 0; i < a.size(); ++i) {
+        if (ascii_lower(static_cast<unsigned char>(a[i])) != ascii_lower(static_cast<unsigned char>(b[i]))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::string_view trim_lws(std::string_view value) {
+    while (!value.empty()) {
+        char ch = value.front();
+        if (ch != ' ' && ch != '\t') {
+            break;
+        }
+        value.remove_prefix(1);
+    }
+    while (!value.empty()) {
+        char ch = value.back();
+        if (ch != ' ' && ch != '\t') {
+            break;
+        }
+        value.remove_suffix(1);
+    }
+    return value;
+}
+
+template <typename F>
+void for_each_token(std::string_view value, F &&fn) {
+    size_t start = 0;
+    while (start < value.size()) {
+        size_t comma = value.find(',', start);
+        size_t end = comma == std::string_view::npos ? value.size() : comma;
+        std::string_view token = trim_lws(value.substr(start, end - start));
+        if (!token.empty()) {
+            fn(token);
+        }
+        if (comma == std::string_view::npos) {
+            break;
+        }
+        start = comma + 1;
+    }
+}
+
+} // namespace
+
+bool Http1Context::handle_content_length(HttpExchange &exchange, std::string_view value) {
+    value = trim_lws(value);
+    if (value.empty()) {
+        return false;
+    }
+    unsigned long long parsed = 0;
+    auto result = std::from_chars(value.data(), value.data() + value.size(), parsed, 10);
+    if (result.ec != std::errc() || result.ptr != value.data() + value.size()) {
+        return false;
+    }
+    if (parsed > static_cast<unsigned long long>(std::numeric_limits<size_t>::max())) {
+        return false;
+    }
+    size_t length = static_cast<size_t>(parsed);
+    if (exchange.request_content_length_set_ && exchange.request_content_length_ != length) {
+        return false;
+    }
+    if (!exchange.request_chunked_) {
+        exchange.request_content_length_set_ = true;
+        exchange.request_content_length_ = length;
+    }
+    return true;
+}
+
+bool Http1Context::handle_transfer_encoding(HttpExchange &exchange, std::string_view value) {
+    bool chunked = false;
+    for_each_token(value, [&](std::string_view token) {
+        if (equals_ascii_ci(token, "chunked")) {
+            chunked = true;
+        }
+    });
+    if (chunked) {
+        exchange.request_chunked_ = true;
+        exchange.request_content_length_set_ = false;
+        exchange.request_content_length_ = 0;
+    }
+    return true;
+}
+
+bool Http1Context::handle_connection(HttpExchange &exchange, std::string_view value) {
+    for_each_token(value, [&](std::string_view token) {
+        if (equals_ascii_ci(token, "close")) {
+            exchange.request_close_ = true;
+        } else if (equals_ascii_ci(token, "keep-alive")) {
+            exchange.request_keep_alive_ = true;
+        }
+    });
+    return true;
+}
+
+const HeaderMap<Http1Context::HeaderHandler> &Http1Context::header_handler_map() {
+    static HeaderMap<HeaderHandler> handlers = []() {
+        HeaderMap<HeaderHandler> map;
+        map.insert("content-length", &Http1Context::handle_content_length);
+        map.insert("transfer-encoding", &Http1Context::handle_transfer_encoding);
+        map.insert("connection", &Http1Context::handle_connection);
+        return map;
+    }();
+    return handlers;
+}
 
 Http1Context::Http1Context(HttpTransport &transport, const HttpServerOptions &options) :
     header_bufs_(HeaderBuffers::Opt{options.header_init_size, options.header_large_size, options.header_large_num}),
@@ -10,6 +133,36 @@ Http1Context::Http1Context(HttpTransport &transport, const HttpServerOptions &op
 
 fiber::async::Task<fiber::common::IoResult<ParseCode>> Http1Context::parse_request(HttpExchange &exchange,
                                                                                    BufChain *chain) {
+    exchange.request_headers_.clear();
+    exchange.response_headers_.clear();
+    exchange.method_ = HttpMethod::Unknown;
+    exchange.version_ = HttpVersion::HTTP_1_1;
+    exchange.uri_ = HttpUri{};
+    exchange.method_view_ = {};
+    exchange.version_view_ = {};
+    exchange.header_adjacent_body_ = nullptr;
+    exchange.transport_ = transport_;
+    exchange.options_ = &options_;
+    exchange.request_chunked_ = false;
+    exchange.request_content_length_set_ = false;
+    exchange.request_content_length_ = 0;
+    exchange.request_body_read_ = 0;
+    exchange.request_body_done_ = false;
+    exchange.request_close_ = false;
+    exchange.request_keep_alive_ = false;
+    exchange.chunk_remaining_ = 0;
+    exchange.chunk_done_ = false;
+    exchange.body_buffer_primed_ = false;
+    exchange.body_buffer_offset_ = 0;
+    exchange.body_buffer_.clear();
+    exchange.response_chunked_ = false;
+    exchange.response_header_sent_ = false;
+    exchange.response_complete_ = false;
+    exchange.response_close_ = false;
+    exchange.response_content_length_set_ = false;
+    exchange.response_content_length_ = 0;
+    exchange.response_body_sent_ = 0;
+
     if (!chain) {
         chain = header_bufs_.alloc(header_pool_);
         if (!chain) {
@@ -130,6 +283,11 @@ fiber::async::Task<fiber::common::IoResult<ParseCode>> Http1Context::parse_reque
             }
 
             uint32_t hash = line.header_hash;
+            if (auto *handler = header_handler_map().get(std::string_view(lowercase, name_len), hash)) {
+                if (!(*handler)(exchange, value)) {
+                    co_return ParseCode::InvalidHeader;
+                }
+            }
             if (!exchange.request_headers_.add_view(name, value, lowercase, hash)) {
                 co_return ParseCode::Error;
             }
@@ -145,7 +303,7 @@ fiber::async::Task<fiber::common::IoResult<ParseCode>> Http1Context::parse_reque
             }
             co_return ParseCode::Ok;
         }
-        co_return ParseCode::Error;
+        co_return code;
     }
 }
 
