@@ -733,21 +733,6 @@ ParseCode HeaderLineParser::replace_buf_ptr(BufChain *old_chain, BufChain *new_c
 }
 
 
-bool HeaderLineParser::header_view(std::string_view &name, std::string_view &value) const noexcept {
-    if (!line_.header_name_start || !line_.header_name_end || line_.header_name_end < line_.header_name_start) {
-        return false;
-    }
-    size_t name_len = static_cast<size_t>(line_.header_name_end - line_.header_name_start);
-    name = std::string_view(reinterpret_cast<char *>(line_.header_name_start), name_len);
-    if (line_.header_start && line_.header_end && line_.header_end >= line_.header_start) {
-        size_t value_len = static_cast<size_t>(line_.header_end - line_.header_start);
-        value = std::string_view(reinterpret_cast<char *>(line_.header_start), value_len);
-    } else {
-        value = {};
-    }
-    return true;
-}
-
 ParseCode HeaderLineParser::execute(BufChain *buffer) {
     if (buffer->readable() == 0) {
         return ParseCode::Again;

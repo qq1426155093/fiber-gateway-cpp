@@ -19,8 +19,7 @@ public:
     struct HeaderField {
         const char *name = nullptr;
         uint32_t name_len = 0;
-        const char *lowcase_name = nullptr;
-        uint32_t lowcase_len = 0;
+        char *lowcase_name = nullptr;
         const char *value = nullptr;
         uint32_t value_len = 0;
         uint64_t name_hash = 0;
@@ -29,16 +28,22 @@ public:
         HeaderField *prev_all = nullptr;
 
         std::string_view name_view() const noexcept { return {name, name_len}; }
-        std::string_view lowcase_view() const noexcept { return {lowcase_name, lowcase_len}; }
+        std::string_view lowcase_view() const noexcept { return {lowcase_name, name_len}; }
         std::string_view value_view() const noexcept { return {value, value_len}; }
     };
 
     explicit HttpHeaders(mem::BufPool &pool);
 
     HeaderField *add(std::string_view name, std::string_view value);
-    HeaderField *add(std::string_view name, std::string_view value, std::string_view lowcase_name, uint64_t hash);
+    HeaderField *add(std::string_view name, std::string_view value, char *lowcase_name, uint64_t hash);
     HeaderField *set(std::string_view name, std::string_view value);
-    HeaderField *set(std::string_view name, std::string_view value, std::string_view lowcase_name, uint64_t hash);
+    HeaderField *set(std::string_view name, std::string_view value, char *lowcase_name, uint64_t hash);
+    // add_view/set_view keep external pointers; caller guarantees lifetime.
+    // For correct lowcase-key lookups, prefer add_view with lowcase_name or pass lowercase name.
+    HeaderField *add_view(std::string_view name, std::string_view value);
+    HeaderField *add_view(std::string_view name, std::string_view value, char *lowcase_name, uint64_t hash);
+    HeaderField *set_view(std::string_view name, std::string_view value);
+    HeaderField *set_view(std::string_view name, std::string_view value, char *lowcase_name, uint64_t hash);
     std::string_view get(std::string_view name) const noexcept;
     bool contains(std::string_view name) const noexcept;
     size_t remove(std::string_view name) noexcept;
@@ -145,7 +150,7 @@ public:
     ConstIterator end() const noexcept;
 
 private:
-    using BucketVector = std::vector<HeaderField *, mem::PoolAllocator<HeaderField>>;
+    using BucketVector = std::vector<HeaderField *, mem::PoolAllocator<HeaderField *>>;
 
     static constexpr size_t kDefaultBuckets = 32;
 
@@ -160,6 +165,7 @@ private:
     const char *copy_to_pool(std::string_view data, bool &ok);
     const char *copy_lowercase_to_pool(std::string_view data, uint64_t &hash, bool &ok);
     HeaderField *alloc_field(bool &ok);
+    HeaderField *link_field(HeaderField *field) noexcept;
 
     mem::BufPool *pool_ = nullptr;
     BucketVector bucket_head_;

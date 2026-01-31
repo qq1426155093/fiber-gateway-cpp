@@ -6,46 +6,14 @@ namespace fiber::http {
 
 namespace {
 
-std::string to_lowcase(std::string_view name) {
-    std::string out;
-    out.resize(name.size());
+void to_lowercase(std::string_view name, char *dst) {
     for (size_t i = 0; i < name.size(); ++i) {
         unsigned char lower = static_cast<unsigned char>(name[i]);
         if (lower >= 'A' && lower <= 'Z') {
             lower = static_cast<unsigned char>(lower - 'A' + 'a');
         }
-        out[i] = static_cast<char>(lower);
+        dst[i] = static_cast<char>(lower);
     }
-    return out;
-}
-
-std::uint8_t *select_copy_start(const RequestLineParser &req, const HeaderLineParser &hdr, bool request_done,
-                                BufChain *chain) {
-    if (!request_done) {
-        auto ptr = req.state().request_start;
-        return ptr ? ptr : chain->pos;
-    }
-    auto ptr = hdr.state().header_name_start;
-    return ptr ? ptr : chain->pos;
-}
-
-bool copy_chain_slice(BufChain *from, BufChain *to, std::uint8_t *copy_start) {
-    if (!from || !to || !copy_start) {
-        return false;
-    }
-    if (copy_start > from->last) {
-        return false;
-    }
-    size_t copy_len = static_cast<size_t>(from->last - copy_start);
-    if (copy_len > to->capacity()) {
-        return false;
-    }
-    if (copy_len > 0) {
-        std::memcpy(to->start, copy_start, copy_len);
-    }
-    to->pos = to->start + static_cast<size_t>(from->pos - copy_start);
-    to->last = to->start + copy_len;
-    return true;
 }
 
 } // namespace
@@ -147,14 +115,38 @@ fiber::async::Task<fiber::common::IoResult<ParseCode>> Http1Context::parse_reque
             }
             chain = next;
         }
-        auto p = co_await transport_->read_into(chain, options_.keep_alive_timeout);
+        auto p = co_await transport_->read_into(chain, options_.header_timeout);
         if (!p) {
             co_return std::unexpected(p.error());
         }
         header_len += *p;
         ParseCode code = hdr_parser.execute(chain);
         if (code == ParseCode::Ok) {
-            // Add Header to exchange
+            const auto &line = hdr_parser.state();
+            if (!line.header_name_start || !line.header_name_end || line.header_name_end < line.header_name_start) {
+                co_return ParseCode::InvalidHeader;
+            }
+            size_t name_len = static_cast<size_t>(line.header_name_end - line.header_name_start);
+            std::string_view name(reinterpret_cast<char *>(line.header_name_start), name_len);
+            std::string_view value;
+            if (line.header_start && line.header_end && line.header_end >= line.header_start) {
+                size_t value_len = static_cast<size_t>(line.header_end - line.header_start);
+                value = std::string_view(reinterpret_cast<char *>(line.header_start), value_len);
+            }
+            char *lowercase = static_cast<char *>(exchange.pool_.alloc(name_len));
+            if (lowercase == nullptr) {
+                co_return std::unexpected(common::IoErr::NoMem);
+            }
+            if (line.lowcase_index == name_len) {
+                ::memcpy(lowercase, line.lowcase_header, name_len);
+            } else {
+                to_lowercase(name, lowercase);
+            }
+
+            uint32_t hash = line.header_hash;
+            if (!exchange.request_headers_.add_view(name, value, lowercase, hash)) {
+                co_return ParseCode::Error;
+            }
 
             goto parse_line;
         }

@@ -126,8 +126,6 @@ public:
     // replace the pointers in HeaderLineState.
     // the content was copied to the new_buf_start pointer because the limit of the old memory capacity.
     ParseCode replace_buf_ptr(BufChain *old_chain, BufChain *new_chain) noexcept;
-    bool header_view(std::string_view &name, std::string_view &value) const noexcept;
-    uint32_t header_hash() const noexcept { return line_.header_hash; }
     const HeaderLineState &state() const noexcept { return line_; }
 
     enum class State {
