@@ -79,7 +79,7 @@ BufPool::~BufPool() {
     Block *block = head_;
     while (block) {
         Block *next = block->next;
-        std::free(block);
+        system_free(block);
         block = next;
     }
     head_ = nullptr;
@@ -152,7 +152,7 @@ void BufPool::reset() {
     Block *block = head_->next;
     while (block) {
         Block *next = block->next;
-        std::free(block);
+        system_free(block);
         block = next;
     }
     head_->used = 0;
