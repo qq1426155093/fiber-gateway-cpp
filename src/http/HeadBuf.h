@@ -8,11 +8,13 @@
 #include "../common/mem/BufPool.h"
 namespace fiber::http {
 
+// start     pos             last             end
+//            |   readable     |   writable    |
 struct BufChain : public common::NonMovable, common::NonCopyable {
-    std::uint8_t *start;
-    std::uint8_t *end;
-    std::uint8_t *pos; //
-    std::uint8_t *last;
+    std::uint8_t *start; // start of memory
+    std::uint8_t *end; // end of memory
+    std::uint8_t *pos; // the reader pointer
+    std::uint8_t *last; // the writer pointer
     BufChain *next;
     [[nodiscard]] size_t readable() const noexcept { return last - pos; }
     [[nodiscard]] size_t writable() const noexcept { return end - last; }
@@ -59,12 +61,12 @@ public:
     }
 
     void reset() noexcept { cursor_ = head_; }
-    [[nodiscard]] size_t alloc_num() const noexcept { return alloc_num_; }
+    [[nodiscard]] std::size_t alloc_num() const noexcept { return alloc_num_; }
     [[nodiscard]] const Opt &opt() const noexcept { return opt_; }
     [[nodiscard]] bool exhausted() const noexcept { return alloc_num_ > opt_.large_num; }
 
 private:
-    static Chain *make_chain(fiber::mem::BufPool &pool, size_t size) noexcept {
+    static Chain *make_chain(fiber::mem::BufPool &pool, std::size_t size) noexcept {
         auto *buf = static_cast<std::uint8_t *>(pool.alloc(size, alignof(char)));
         if (!buf) {
             return nullptr;

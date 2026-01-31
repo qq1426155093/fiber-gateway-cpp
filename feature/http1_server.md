@@ -194,6 +194,11 @@ struct TlsOptions {
 ### Transport Abstraction
 - Introduce internal `HttpTransport` interface for `read/write/close`.
 - `TcpTransport` wraps existing `TcpStream` and uses `async::timeout_for`.
+- Additional chain-based IO helpers:
+  - `read_into(BufChain*, timeout)` reads into `last..end` and advances `last` (returns 0 if `writable()==0`).
+  - `readv_into(BufChain*, timeout)` gathers writable segments from the chain head; returns 0 if no writable space.
+  - `write(BufChain*, timeout)` writes from `pos..last` and advances `pos` (returns 0 if `readable()==0`).
+  - `writev(BufChain*, timeout)` gathers readable segments from the chain head; returns 0 if no readable data.
 - `TlsTransport` wraps a `TcpStream` + `detail::TlsStreamFd`:
   - `SSL*` is bound to the non-blocking fd (no memory BIOs).
   - `SSL_read`/`SSL_write` are driven directly; `WANT_READ/WRITE` waits on fd events.

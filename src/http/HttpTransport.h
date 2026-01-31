@@ -10,6 +10,7 @@
 #include "../common/NonMovable.h"
 #include "../async/Task.h"
 #include "../net/TcpStream.h"
+#include "HeadBuf.h"
 #include "TlsContext.h"
 
 namespace fiber::net::detail {
@@ -27,9 +28,17 @@ public:
     virtual fiber::async::Task<common::IoResult<size_t>> read(void *buf,
                                                               size_t len,
                                                               std::chrono::seconds timeout) = 0;
+    virtual fiber::async::Task<common::IoResult<size_t>> read_into(BufChain *buf,
+                                                                   std::chrono::seconds timeout) = 0;
+    virtual fiber::async::Task<common::IoResult<size_t>> readv_into(BufChain *bufs,
+                                                                    std::chrono::seconds timeout) = 0;
     virtual fiber::async::Task<common::IoResult<size_t>> write(const void *buf,
                                                                size_t len,
                                                                std::chrono::seconds timeout) = 0;
+    virtual fiber::async::Task<common::IoResult<size_t>> write(BufChain *buf,
+                                                               std::chrono::seconds timeout) = 0;
+    virtual fiber::async::Task<common::IoResult<size_t>> writev(BufChain *buf,
+                                                                std::chrono::seconds timeout) = 0;
     virtual void close() = 0;
     [[nodiscard]] virtual bool valid() const noexcept = 0;
     [[nodiscard]] virtual int fd() const noexcept = 0;
@@ -45,9 +54,17 @@ public:
     fiber::async::Task<common::IoResult<size_t>> read(void *buf,
                                                       size_t len,
                                                       std::chrono::seconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> read_into(BufChain *buf,
+                                                           std::chrono::seconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> readv_into(BufChain *bufs,
+                                                            std::chrono::seconds timeout) override;
     fiber::async::Task<common::IoResult<size_t>> write(const void *buf,
                                                        size_t len,
                                                        std::chrono::seconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> write(BufChain *buf,
+                                                       std::chrono::seconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> writev(BufChain *buf,
+                                                        std::chrono::seconds timeout) override;
     void close() override;
     [[nodiscard]] bool valid() const noexcept override;
     [[nodiscard]] int fd() const noexcept override;
@@ -69,9 +86,17 @@ public:
     fiber::async::Task<common::IoResult<size_t>> read(void *buf,
                                                       size_t len,
                                                       std::chrono::seconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> read_into(BufChain *buf,
+                                                           std::chrono::seconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> readv_into(BufChain *bufs,
+                                                            std::chrono::seconds timeout) override;
     fiber::async::Task<common::IoResult<size_t>> write(const void *buf,
                                                        size_t len,
                                                        std::chrono::seconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> write(BufChain *buf,
+                                                       std::chrono::seconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> writev(BufChain *buf,
+                                                        std::chrono::seconds timeout) override;
     void close() override;
     [[nodiscard]] bool valid() const noexcept override;
     [[nodiscard]] int fd() const noexcept override;

@@ -41,7 +41,7 @@ enum class HttpMethod {
     Trace = 0x00008000,
     Connect = 0x00010000,
 };
-}
+} // namespace fiber::http
 
 
 #endif // FIBER_HTTPCOMMON_H
