@@ -8,34 +8,13 @@
 
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
+#include "HeadBuf.h"
 #include "HttpCommon.h"
 
 namespace fiber::http {
 
 struct HttpServerOptions;
 class HttpExchange;
-
-enum class HttpParseState {
-    NeedMore,
-    HeadersComplete,
-    MessageComplete,
-    Error,
-};
-
-enum class HttpParseError {
-    None,
-    BadRequest,
-    HeadersTooLarge,
-    BodyTooLarge,
-    ChunkTooLarge,
-    UnsupportedTransferEncoding,
-};
-
-struct HttpParseResult {
-    HttpParseState state = HttpParseState::NeedMore;
-    HttpParseError error = HttpParseError::None;
-    size_t consumed = 0;
-};
 
 enum class ParseCode : int {
     Ok = 0,
@@ -50,11 +29,6 @@ enum class ParseCode : int {
     HeaderDone = -15,
 };
 
-struct ParseBuffer {
-    const char *start = nullptr;
-    const char *pos = nullptr;
-    const char *last = nullptr;
-};
 
 class RequestLineParser : public common::NonCopyable, public common::NonMovable {
 public:
@@ -62,14 +36,10 @@ public:
 
     void reset();
 
-    ParseCode execute(ParseBuffer *buffer);
-    bool carry_over(const char *data,
-                    size_t size,
-                    size_t pos,
-                    char *dst,
-                    size_t dst_cap,
-                    size_t &dst_size,
-                    size_t &dst_pos);
+    ParseCode execute(fiber::http::BufChain *buffer);
+    // replace the pointers in RequestLineState.
+    // the content was copied to the new_buf_start pointer because the limit of the old memory capacity.
+    void replace_buf_ptr(std::uint8_t *new_buf_start);
 
     enum class State {
         Start,
@@ -100,20 +70,18 @@ public:
     };
 
     struct RequestLineState {
-        size_t request_start = kInvalidPos;
-        size_t method_end = kInvalidPos;
-        size_t uri_start = kInvalidPos;
-        size_t uri_end = kInvalidPos;
-        size_t schema_start = kInvalidPos;
-        size_t schema_end = kInvalidPos;
-        size_t host_start = kInvalidPos;
-        size_t host_end = kInvalidPos;
-        size_t port_start = kInvalidPos;
-        size_t port_end = kInvalidPos;
-        size_t args_start = kInvalidPos;
-        size_t request_end = kInvalidPos;
-        size_t uri_ext = kInvalidPos;
-        size_t http_protocol_start = kInvalidPos;
+        std::uint8_t *uri_start{};
+        std::uint8_t *uri_end{};
+        std::uint8_t *uri_ext{};
+        std::uint8_t *args_start{};
+        std::uint8_t *request_start{};
+        std::uint8_t *request_end{};
+        std::uint8_t *method_end{};
+        std::uint8_t *schema_start{};
+        std::uint8_t *schema_end{};
+        std::uint8_t *host_start{};
+        std::uint8_t *host_end{};
+        std::uint8_t *http_protocol_start{};
         int http_major = 0;
         int http_minor = 0;
         int http_version = 0;
@@ -122,7 +90,6 @@ public:
         bool quoted_uri = false;
         bool plus_in_uri = false;
         bool empty_path_in_uri = false;
-        bool upstream = false;
     };
 
 private:
@@ -132,6 +99,7 @@ private:
     const HttpServerOptions *options_ = nullptr;
     State state_ = State::Start;
     RequestLineState line_{};
+    std::uint8_t *buf_start_ = nullptr;
 };
 
 class HeaderLineParser : public common::NonCopyable, public common::NonMovable {
@@ -140,18 +108,13 @@ public:
 
     void reset();
 
-    ParseCode execute(ParseBuffer *buffer);
-    bool carry_over(const char *data,
-                    size_t size,
-                    size_t pos,
-                    char *dst,
-                    size_t dst_cap,
-                    size_t &dst_size,
-                    size_t &dst_pos);
+    ParseCode execute(BufChain *buffer);
+    // replace the pointers in HeaderLineState.
+    // the content was copied to the new_buf_start pointer because the limit of the old memory capacity.
+    void replace_buf_ptr(std::uint8_t *new_buf_start);
 
     [[nodiscard]] bool connection_close() const noexcept { return connection_close_; }
     [[nodiscard]] bool connection_keep_alive() const noexcept { return connection_keep_alive_; }
-    [[nodiscard]] HttpParseError last_error() const noexcept { return last_error_; }
 
     enum class State {
         Start,
@@ -167,14 +130,14 @@ public:
     static constexpr size_t kLowcaseHeaderLen = 32;
 
     struct HeaderLineState {
-        size_t header_name_start = kInvalidPos;
-        size_t header_name_end = kInvalidPos;
-        size_t header_start = kInvalidPos;
-        size_t header_end = kInvalidPos;
+        std::uint8_t lowcase_header[kLowcaseHeaderLen]{};
+        std::uint8_t *header_name_start{};
+        std::uint8_t *header_name_end{};
+        std::uint8_t *header_start{};
+        std::uint8_t *header_end{};
         bool invalid_header = false;
         uint32_t header_hash = 0;
         uint32_t lowcase_index = 0;
-        char lowcase_header[kLowcaseHeaderLen]{};
     };
 
 private:
@@ -186,41 +149,13 @@ private:
     HeaderLineState line_{};
     bool connection_close_ = false;
     bool connection_keep_alive_ = false;
-    HttpParseError last_error_ = HttpParseError::None;
+    std::uint8_t *buf_start_ = nullptr;
 };
 
 class BodyParser : public common::NonCopyable, public common::NonMovable {
 public:
     BodyParser();
-
     void reset();
-
-    HttpParseResult execute(HttpExchange &exchange,
-                            const HttpServerOptions &options,
-                            const char *data,
-                            size_t len);
-
-    enum class State {
-        Init,
-        ContentLength,
-        Chunked,
-        Done
-    };
-
-    struct ChunkedState {
-        size_t size = 0;
-        size_t length = 0;
-        int state = 0;
-    };
-
-private:
-    static constexpr size_t kInvalidPos = std::numeric_limits<size_t>::max();
-
-    State state_ = State::Init;
-    std::string parse_buffer_;
-    size_t parse_offset_ = 0;
-    size_t body_bytes_ = 0;
-    ChunkedState chunked_state_{};
 };
 
 } // namespace fiber::http

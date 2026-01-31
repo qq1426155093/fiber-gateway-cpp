@@ -137,29 +137,6 @@ void *BufPool::alloc_large(size_t size, size_t align) {
     return data;
 }
 
-void BufPool::reset() {
-    if (!head_) {
-        return;
-    }
-    LargeBlock *large = large_head_;
-    while (large) {
-        LargeBlock *next = large->next;
-        system_free(large->data);
-        large = next;
-    }
-    large_head_ = nullptr;
-
-    Block *block = head_->next;
-    while (block) {
-        Block *next = block->next;
-        system_free(block);
-        block = next;
-    }
-    head_->used = 0;
-    head_->next = nullptr;
-    current_ = head_;
-}
-
 BufPool::Block *BufPool::allocate_block(size_t size) {
     auto *block = static_cast<Block *>(system_alloc(block_size_, alignof(Block)));
     if (!block) {

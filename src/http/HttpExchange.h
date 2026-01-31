@@ -72,12 +72,10 @@ private:
     friend class HeaderLineParser;
     friend class BodyParser;
 
-    explicit HttpExchange(Http1Connection &connection, const HttpServerOptions &options, mem::BufPool &header_pool);
-    void reset();
+    explicit HttpExchange(Http1Connection &connection, const HttpServerOptions &options);
 
     Http1Connection *connection_ = nullptr;
-    const HttpServerOptions *options_ = nullptr;
-    mem::BufPool *header_pool_ = nullptr;
+    mem::BufPool pool_;
 
     HttpMethod method_{};
     HttpVersion version_{};

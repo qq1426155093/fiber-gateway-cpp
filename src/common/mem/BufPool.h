@@ -24,8 +24,6 @@ public:
         return static_cast<T *>(alloc(bytes, alignof(T)));
     }
 
-    void reset();
-
 private:
     struct Block {
         char *data = nullptr;
