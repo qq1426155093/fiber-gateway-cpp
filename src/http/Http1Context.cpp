@@ -47,7 +47,7 @@ std::string_view trim_lws(std::string_view value) {
     return value;
 }
 
-template <typename F>
+template<typename F>
 void for_each_token(std::string_view value, F &&fn) {
     size_t start = 0;
     while (start < value.size()) {
@@ -66,11 +66,8 @@ void for_each_token(std::string_view value, F &&fn) {
 
 } // namespace
 
-bool Http1Context::handle_content_length(HttpExchange &exchange, std::string_view value) {
-    value = trim_lws(value);
-    if (value.empty()) {
-        return false;
-    }
+bool Http1Context::handle_content_length(HttpExchange &exchange, const HttpHeaders::HeaderField &header) {
+    std::string_view value = header.value_view();
     unsigned long long parsed = 0;
     auto result = std::from_chars(value.data(), value.data() + value.size(), parsed, 10);
     if (result.ec != std::errc() || result.ptr != value.data() + value.size()) {
@@ -90,7 +87,8 @@ bool Http1Context::handle_content_length(HttpExchange &exchange, std::string_vie
     return true;
 }
 
-bool Http1Context::handle_transfer_encoding(HttpExchange &exchange, std::string_view value) {
+bool Http1Context::handle_transfer_encoding(HttpExchange &exchange, const HttpHeaders::HeaderField &header) {
+    std::string_view value = header.value_view();
     bool chunked = false;
     for_each_token(value, [&](std::string_view token) {
         if (equals_ascii_ci(token, "chunked")) {
@@ -105,7 +103,8 @@ bool Http1Context::handle_transfer_encoding(HttpExchange &exchange, std::string_
     return true;
 }
 
-bool Http1Context::handle_connection(HttpExchange &exchange, std::string_view value) {
+bool Http1Context::handle_connection(HttpExchange &exchange, const HttpHeaders::HeaderField &header) {
+    std::string_view value = header.value_view();
     for_each_token(value, [&](std::string_view token) {
         if (equals_ascii_ci(token, "close")) {
             exchange.request_close_ = true;
@@ -188,11 +187,13 @@ fiber::async::Task<fiber::common::IoResult<ParseCode>> Http1Context::parse_reque
                 }
                 chain = next;
             }
-            auto p = co_await transport_->read_into(chain, options_.keep_alive_timeout);
-            if (!p) {
-                co_return std::unexpected(p.error());
+            if (chain->readable() == 0) {
+                auto p = co_await transport_->read_into(chain, options_.keep_alive_timeout);
+                if (!p) {
+                    co_return std::unexpected(p.error());
+                }
+                header_len += *p;
             }
-            header_len += *p;
             ParseCode code = req_parser.execute(chain);
             if (code == ParseCode::Again) {
                 goto parse_request;
@@ -203,7 +204,7 @@ fiber::async::Task<fiber::common::IoResult<ParseCode>> Http1Context::parse_reque
             const auto &line = req_parser.state();
             exchange.method_ = line.method;
             if (line.request_start && line.method_end && line.method_end >= line.request_start) {
-                size_t method_len = static_cast<size_t>(line.method_end - line.request_start + 1);
+                std::size_t method_len = static_cast<size_t>(line.method_end - line.request_start + 1);
                 exchange.method_view_ = std::string_view(reinterpret_cast<char *>(line.request_start), method_len);
             } else {
                 exchange.method_view_ = {};
@@ -211,21 +212,20 @@ fiber::async::Task<fiber::common::IoResult<ParseCode>> Http1Context::parse_reque
 
             exchange.version_ = static_cast<HttpVersion>(line.http_version);
             if (line.http_protocol_start && line.request_end && line.request_end >= line.http_protocol_start) {
-                size_t version_len = static_cast<size_t>(line.request_end - line.http_protocol_start + 1);
+                std::size_t version_len = static_cast<size_t>(line.request_end - line.http_protocol_start);
                 exchange.version_view_ =
                         std::string_view(reinterpret_cast<char *>(line.http_protocol_start), version_len);
             } else {
                 exchange.version_view_ = {};
             }
 
-            exchange.uri_ = HttpUri{};
             if (line.uri_start && line.uri_end && line.uri_end >= line.uri_start) {
-                size_t uri_len = static_cast<size_t>(line.uri_end - line.uri_start);
+                std::size_t uri_len = static_cast<std::size_t>(line.uri_end - line.uri_start);
                 exchange.uri_.unparsed_uri = std::string_view(reinterpret_cast<char *>(line.uri_start), uri_len);
                 if (line.args_start && line.args_start <= line.uri_end) {
-                    size_t path_len = static_cast<size_t>(line.args_start - line.uri_start - 1);
+                    std::size_t path_len = static_cast<size_t>(line.args_start - line.uri_start - 1);
                     exchange.uri_.path = std::string_view(reinterpret_cast<char *>(line.uri_start), path_len);
-                    size_t query_len = static_cast<size_t>(line.uri_end - line.args_start);
+                    std::size_t query_len = static_cast<size_t>(line.uri_end - line.args_start);
                     exchange.uri_.query = std::string_view(reinterpret_cast<char *>(line.args_start), query_len);
                 } else {
                     exchange.uri_.path = exchange.uri_.unparsed_uri;
@@ -254,22 +254,24 @@ fiber::async::Task<fiber::common::IoResult<ParseCode>> Http1Context::parse_reque
             }
             chain = next;
         }
-        auto p = co_await transport_->read_into(chain, options_.header_timeout);
-        if (!p) {
-            co_return std::unexpected(p.error());
+        if (chain->readable() == 0) {
+            auto p = co_await transport_->read_into(chain, options_.keep_alive_timeout);
+            if (!p) {
+                co_return std::unexpected(p.error());
+            }
+            header_len += *p;
         }
-        header_len += *p;
         ParseCode code = hdr_parser.execute(chain);
         if (code == ParseCode::Ok) {
             const auto &line = hdr_parser.state();
             if (!line.header_name_start || !line.header_name_end || line.header_name_end < line.header_name_start) {
                 co_return ParseCode::InvalidHeader;
             }
-            size_t name_len = static_cast<size_t>(line.header_name_end - line.header_name_start);
+            std::size_t name_len = static_cast<std::size_t>(line.header_name_end - line.header_name_start);
             std::string_view name(reinterpret_cast<char *>(line.header_name_start), name_len);
             std::string_view value;
             if (line.header_start && line.header_end && line.header_end >= line.header_start) {
-                size_t value_len = static_cast<size_t>(line.header_end - line.header_start);
+                std::size_t value_len = static_cast<std::size_t>(line.header_end - line.header_start);
                 value = std::string_view(reinterpret_cast<char *>(line.header_start), value_len);
             }
             char *lowercase = static_cast<char *>(exchange.pool_.alloc(name_len));
@@ -283,13 +285,15 @@ fiber::async::Task<fiber::common::IoResult<ParseCode>> Http1Context::parse_reque
             }
 
             uint32_t hash = line.header_hash;
+
+            HttpHeaders::HeaderField *field = exchange.request_headers_.add_view(name, value, lowercase, hash);
+            if (!field) {
+                co_return std::unexpected(common::IoErr::NoMem);
+            }
             if (auto *handler = header_handler_map().get(std::string_view(lowercase, name_len), hash)) {
-                if (!(*handler)(exchange, value)) {
+                if (!(*handler)(exchange, *field)) {
                     co_return ParseCode::InvalidHeader;
                 }
-            }
-            if (!exchange.request_headers_.add_view(name, value, lowercase, hash)) {
-                co_return ParseCode::Error;
             }
 
             goto parse_line;
