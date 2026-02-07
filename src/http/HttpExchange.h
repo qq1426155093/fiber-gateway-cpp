@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -14,7 +15,6 @@
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
 #include "../common/mem/BufPool.h"
-#include "Http1Parser.h"
 #include "HttpCommon.h"
 #include "HttpHeaders.h"
 #include "TlsOptions.h"
@@ -38,14 +38,18 @@ struct ReadBodyResult {
     bool end = false;
 };
 
-class BodyParser;
 class Http1Context;
+class Http1ExchangeIo;
+class HttpExchangeIo;
 class HttpTransport;
+class RequestLineParser;
+class HeaderLineParser;
 
 
 class HttpExchange : public common::NonCopyable, public common::NonMovable {
 public:
     explicit HttpExchange(const HttpServerOptions &options);
+    ~HttpExchange();
 
     [[nodiscard]] HttpMethod method() const noexcept { return method_; }
     [[nodiscard]] HttpVersion version() const noexcept { return version_; }
@@ -70,10 +74,12 @@ public:
 
 
 private:
+    void set_io(std::unique_ptr<HttpExchangeIo> io) noexcept;
+
     friend class RequestLineParser;
     friend class HeaderLineParser;
-    friend class BodyParser;
     friend class Http1Context;
+    friend class Http1ExchangeIo;
 
     fiber::mem::BufPool pool_;
     HttpMethod method_{};
@@ -85,31 +91,15 @@ private:
 
     HttpHeaders response_headers_;
     bool response_chunked_ = false;
-    bool response_header_sent_ = false;
-    bool response_complete_ = false;
     bool response_close_ = false;
     bool response_content_length_set_ = false;
     size_t response_content_length_ = 0;
-    size_t response_body_sent_ = 0;
-    BufChain *header_adjacent_body_{};
-
-    HttpTransport *transport_ = nullptr;
-    const HttpServerOptions *options_ = nullptr;
     bool request_chunked_ = false;
     bool request_content_length_set_ = false;
     size_t request_content_length_ = 0;
-    size_t request_body_read_ = 0;
-    bool request_body_done_ = false;
     bool request_close_ = false;
     bool request_keep_alive_ = false;
-    size_t chunk_remaining_ = 0;
-    bool chunk_done_ = false;
-    bool body_buffer_primed_ = false;
-    size_t body_buffer_offset_ = 0;
-
-    std::string body_buffer_;
-
-    BodyParser body_parser_{};
+    std::unique_ptr<HttpExchangeIo> io_;
 };
 
 using HttpHandler = std::function<fiber::async::Task<void>(HttpExchange &)>;

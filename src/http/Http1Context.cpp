@@ -3,9 +3,11 @@
 #include <charconv>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <system_error>
 
 #include "HeaderMap.h"
+#include "Http1ExchangeIo.h"
 
 namespace fiber::http {
 
@@ -139,28 +141,16 @@ fiber::async::Task<fiber::common::IoResult<ParseCode>> Http1Context::parse_reque
     exchange.uri_ = HttpUri{};
     exchange.method_view_ = {};
     exchange.version_view_ = {};
-    exchange.header_adjacent_body_ = nullptr;
-    exchange.transport_ = transport_;
-    exchange.options_ = &options_;
+    exchange.set_io(nullptr);
     exchange.request_chunked_ = false;
     exchange.request_content_length_set_ = false;
     exchange.request_content_length_ = 0;
-    exchange.request_body_read_ = 0;
-    exchange.request_body_done_ = false;
     exchange.request_close_ = false;
     exchange.request_keep_alive_ = false;
-    exchange.chunk_remaining_ = 0;
-    exchange.chunk_done_ = false;
-    exchange.body_buffer_primed_ = false;
-    exchange.body_buffer_offset_ = 0;
-    exchange.body_buffer_.clear();
     exchange.response_chunked_ = false;
-    exchange.response_header_sent_ = false;
-    exchange.response_complete_ = false;
     exchange.response_close_ = false;
     exchange.response_content_length_set_ = false;
     exchange.response_content_length_ = 0;
-    exchange.response_body_sent_ = 0;
 
     if (!chain) {
         chain = header_bufs_.alloc(header_pool_);
@@ -302,9 +292,8 @@ fiber::async::Task<fiber::common::IoResult<ParseCode>> Http1Context::parse_reque
             goto parse_line;
         }
         if (code == ParseCode::HeaderDone) {
-            if (chain->readable() > 0) {
-                exchange.header_adjacent_body_ = chain;
-            }
+            BufChain *header_adjacent_body = chain->readable() > 0 ? chain : nullptr;
+            exchange.set_io(std::make_unique<Http1ExchangeIo>(*transport_, options_, header_adjacent_body));
             co_return ParseCode::Ok;
         }
         co_return code;
