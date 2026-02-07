@@ -40,6 +40,8 @@ struct ReadBodyResult {
 
 class Http1Context;
 class Http1ExchangeIo;
+class Http2Connection;
+class Http2ExchangeIo;
 class HttpExchangeIo;
 class HttpTransport;
 class RequestLineParser;
@@ -80,6 +82,8 @@ private:
     friend class HeaderLineParser;
     friend class Http1Context;
     friend class Http1ExchangeIo;
+    friend class Http2Connection;
+    friend class Http2ExchangeIo;
 
     fiber::mem::BufPool pool_;
     HttpMethod method_{};

@@ -33,7 +33,7 @@ file(GLOB_RECURSE CPP_SRC_LIST ${CMAKE_CURRENT_LIST_DIR}/src/*.cpp)
 
 add_library(fiber_lib STATIC ${CPP_SRC_LIST})
 target_include_directories(fiber_lib PUBLIC ${CMAKE_CURRENT_LIST_DIR}/src)
-target_link_libraries(fiber_lib PUBLIC boringssl::ssl boringssl::crypto)
+target_link_libraries(fiber_lib PUBLIC boringssl::ssl boringssl::crypto nghttp2::nghttp2)
 if (FIBER_USE_LIBCXX)
     target_link_options(fiber_lib INTERFACE ${FIBER_STDLIB_LINK_FLAGS})
 endif()
