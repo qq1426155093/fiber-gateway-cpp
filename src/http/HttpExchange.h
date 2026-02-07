@@ -66,7 +66,8 @@ public:
     void set_response_close();
 
     fiber::async::Task<common::IoResult<void>> send_response_header(int status, std::string_view reason = {});
-    fiber::async::Task<common::IoResult<size_t>> write_body(const void *buf, size_t len, bool end) noexcept;
+    fiber::async::Task<common::IoResult<size_t>> write_body(const uint8_t *buf, size_t len, bool end) noexcept;
+
 
 private:
     friend class RequestLineParser;

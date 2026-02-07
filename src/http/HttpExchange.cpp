@@ -391,7 +391,7 @@ fiber::async::Task<common::IoResult<void>> HttpExchange::send_response_header(in
     co_return common::IoResult<void>{};
 }
 
-fiber::async::Task<common::IoResult<size_t>> HttpExchange::write_body(const void *buf, size_t len, bool end) noexcept {
+fiber::async::Task<common::IoResult<size_t>> HttpExchange::write_body(const uint8_t *buf, size_t len, bool end) noexcept {
     if (!transport_ || !options_) {
         co_return std::unexpected(common::IoErr::Invalid);
     }

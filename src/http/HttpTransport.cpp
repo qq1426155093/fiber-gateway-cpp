@@ -88,17 +88,17 @@ BufChain *first_readable(BufChain *head) {
 TcpTransport::TcpTransport(std::unique_ptr<net::TcpStream> stream) : stream_(std::move(stream)) {
 }
 
-fiber::async::Task<common::IoResult<void>> TcpTransport::handshake(std::chrono::seconds) {
+fiber::async::Task<common::IoResult<void>> TcpTransport::handshake(std::chrono::milliseconds) {
     co_return common::IoResult<void>{};
 }
 
-fiber::async::Task<common::IoResult<void>> TcpTransport::shutdown(std::chrono::seconds) {
+fiber::async::Task<common::IoResult<void>> TcpTransport::shutdown(std::chrono::milliseconds) {
     co_return common::IoResult<void>{};
 }
 
 fiber::async::Task<common::IoResult<size_t>> TcpTransport::read(void *buf,
                                                       size_t len,
-                                                      std::chrono::seconds timeout) {
+                                                      std::chrono::milliseconds timeout) {
     auto result = co_await fiber::async::timeout_for(
         [&]() { return stream_->read(buf, len); }, timeout);
     if (!result) {
@@ -108,7 +108,7 @@ fiber::async::Task<common::IoResult<size_t>> TcpTransport::read(void *buf,
 }
 
 fiber::async::Task<common::IoResult<size_t>> TcpTransport::read_into(BufChain *buf,
-                                                                     std::chrono::seconds timeout) {
+                                                                     std::chrono::milliseconds timeout) {
     if (!buf) {
         co_return std::unexpected(common::IoErr::Invalid);
     }
@@ -126,7 +126,7 @@ fiber::async::Task<common::IoResult<size_t>> TcpTransport::read_into(BufChain *b
 }
 
 fiber::async::Task<common::IoResult<size_t>> TcpTransport::readv_into(BufChain *bufs,
-                                                                      std::chrono::seconds timeout) {
+                                                                      std::chrono::milliseconds timeout) {
     if (!bufs) {
         co_return std::unexpected(common::IoErr::Invalid);
     }
@@ -146,7 +146,7 @@ fiber::async::Task<common::IoResult<size_t>> TcpTransport::readv_into(BufChain *
 
 fiber::async::Task<common::IoResult<size_t>> TcpTransport::write(const void *buf,
                                                        size_t len,
-                                                       std::chrono::seconds timeout) {
+                                                       std::chrono::milliseconds timeout) {
     auto result = co_await fiber::async::timeout_for(
         [&]() { return stream_->write(buf, len); }, timeout);
     if (!result) {
@@ -156,7 +156,7 @@ fiber::async::Task<common::IoResult<size_t>> TcpTransport::write(const void *buf
 }
 
 fiber::async::Task<common::IoResult<size_t>> TcpTransport::write(BufChain *buf,
-                                                                 std::chrono::seconds timeout) {
+                                                                 std::chrono::milliseconds timeout) {
     if (!buf) {
         co_return std::unexpected(common::IoErr::Invalid);
     }
@@ -174,7 +174,7 @@ fiber::async::Task<common::IoResult<size_t>> TcpTransport::write(BufChain *buf,
 }
 
 fiber::async::Task<common::IoResult<size_t>> TcpTransport::writev(BufChain *buf,
-                                                                  std::chrono::seconds timeout) {
+                                                                  std::chrono::milliseconds timeout) {
     if (!buf) {
         co_return std::unexpected(common::IoErr::Invalid);
     }
@@ -240,7 +240,7 @@ common::IoResult<void> TlsTransport::init() {
     return {};
 }
 
-fiber::async::Task<common::IoResult<void>> TlsTransport::handshake(std::chrono::seconds timeout) {
+fiber::async::Task<common::IoResult<void>> TlsTransport::handshake(std::chrono::milliseconds timeout) {
     if (!tls_stream_) {
         co_return std::unexpected(common::IoErr::Invalid);
     }
@@ -249,7 +249,7 @@ fiber::async::Task<common::IoResult<void>> TlsTransport::handshake(std::chrono::
     co_return result;
 }
 
-fiber::async::Task<common::IoResult<void>> TlsTransport::shutdown(std::chrono::seconds timeout) {
+fiber::async::Task<common::IoResult<void>> TlsTransport::shutdown(std::chrono::milliseconds timeout) {
     if (!tls_stream_) {
         co_return common::IoResult<void>{};
     }
@@ -260,7 +260,7 @@ fiber::async::Task<common::IoResult<void>> TlsTransport::shutdown(std::chrono::s
 
 fiber::async::Task<common::IoResult<size_t>> TlsTransport::read(void *buf,
                                                       size_t len,
-                                                      std::chrono::seconds timeout) {
+                                                      std::chrono::milliseconds timeout) {
     auto hs_result = co_await handshake(context_->options().handshake_timeout);
     if (!hs_result) {
         co_return std::unexpected(hs_result.error());
@@ -274,7 +274,7 @@ fiber::async::Task<common::IoResult<size_t>> TlsTransport::read(void *buf,
 }
 
 fiber::async::Task<common::IoResult<size_t>> TlsTransport::read_into(BufChain *buf,
-                                                                     std::chrono::seconds timeout) {
+                                                                     std::chrono::milliseconds timeout) {
     if (!buf) {
         co_return std::unexpected(common::IoErr::Invalid);
     }
@@ -296,7 +296,7 @@ fiber::async::Task<common::IoResult<size_t>> TlsTransport::read_into(BufChain *b
 }
 
 fiber::async::Task<common::IoResult<size_t>> TlsTransport::readv_into(BufChain *bufs,
-                                                                      std::chrono::seconds timeout) {
+                                                                      std::chrono::milliseconds timeout) {
     if (!bufs) {
         co_return std::unexpected(common::IoErr::Invalid);
     }
@@ -309,7 +309,7 @@ fiber::async::Task<common::IoResult<size_t>> TlsTransport::readv_into(BufChain *
 
 fiber::async::Task<common::IoResult<size_t>> TlsTransport::write(const void *buf,
                                                        size_t len,
-                                                       std::chrono::seconds timeout) {
+                                                       std::chrono::milliseconds timeout) {
     auto hs_result = co_await handshake(context_->options().handshake_timeout);
     if (!hs_result) {
         co_return std::unexpected(hs_result.error());
@@ -323,7 +323,7 @@ fiber::async::Task<common::IoResult<size_t>> TlsTransport::write(const void *buf
 }
 
 fiber::async::Task<common::IoResult<size_t>> TlsTransport::write(BufChain *buf,
-                                                                 std::chrono::seconds timeout) {
+                                                                 std::chrono::milliseconds timeout) {
     if (!buf) {
         co_return std::unexpected(common::IoErr::Invalid);
     }
@@ -345,7 +345,7 @@ fiber::async::Task<common::IoResult<size_t>> TlsTransport::write(BufChain *buf,
 }
 
 fiber::async::Task<common::IoResult<size_t>> TlsTransport::writev(BufChain *buf,
-                                                                  std::chrono::seconds timeout) {
+                                                                  std::chrono::milliseconds timeout) {
     if (!buf) {
         co_return std::unexpected(common::IoErr::Invalid);
     }
