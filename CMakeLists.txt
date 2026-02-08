@@ -122,6 +122,7 @@ if(FIBER_BUILD_TESTS)
             tests/ScriptPlanTest.cpp
             tests/ThreadGroupTest.cpp
             tests/EventLoopTest.cpp
+            tests/WaitGroupTest.cpp
             tests/SleepTest.cpp
             tests/TimeoutTest.cpp
             tests/MutexTest.cpp
