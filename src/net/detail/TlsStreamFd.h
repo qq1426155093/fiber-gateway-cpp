@@ -5,6 +5,7 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 #include "../../common/IoError.h"
 #include "../../common/NonCopyable.h"
@@ -57,6 +58,7 @@ public:
 
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] int fd() const noexcept;
+    [[nodiscard]] std::string selected_alpn() const noexcept;
     void close();
 
     [[nodiscard]] ReadAwaiter read(void *buf, size_t len) noexcept;

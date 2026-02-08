@@ -206,6 +206,10 @@ int TcpTransport::fd() const noexcept {
     return stream_ ? stream_->fd() : -1;
 }
 
+std::string TcpTransport::negotiated_alpn() const noexcept {
+    return {};
+}
+
 const net::SocketAddress &TcpTransport::remote_addr() const noexcept {
     return stream_->remote_addr();
 }
@@ -372,6 +376,13 @@ bool TlsTransport::valid() const noexcept {
 
 int TlsTransport::fd() const noexcept {
     return stream_ ? stream_->fd() : -1;
+}
+
+std::string TlsTransport::negotiated_alpn() const noexcept {
+    if (!tls_stream_) {
+        return {};
+    }
+    return tls_stream_->selected_alpn();
 }
 
 const net::SocketAddress &TlsTransport::remote_addr() const noexcept {

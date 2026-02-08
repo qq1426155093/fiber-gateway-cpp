@@ -66,6 +66,19 @@ int TlsStreamFd::fd() const noexcept {
     return fd_;
 }
 
+std::string TlsStreamFd::selected_alpn() const noexcept {
+    if (!ssl_) {
+        return {};
+    }
+    const unsigned char *proto = nullptr;
+    unsigned int proto_len = 0;
+    SSL_get0_alpn_selected(ssl_, &proto, &proto_len);
+    if (!proto || proto_len == 0) {
+        return {};
+    }
+    return std::string(reinterpret_cast<const char *>(proto), proto_len);
+}
+
 void TlsStreamFd::close() {
     FIBER_ASSERT(loop_.in_loop());
     if (fd_ < 0) {
