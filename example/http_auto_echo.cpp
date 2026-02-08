@@ -115,8 +115,8 @@ int main(int argc, char **argv) {
         cert_file = argv[2];
         key_file = argv[3];
     } else {
-        std::cerr << "usage: http_auto_echo [port] <cert.pem> <key.pem>\n";
-        return 1;
+        cert_file = "../build/http2-demo/cert.pem";
+        key_file = "../build/http2-demo/key.pem";
     }
 
     fiber::event::EventLoop loop;
