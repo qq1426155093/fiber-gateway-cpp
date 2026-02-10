@@ -145,7 +145,7 @@ fiber::async::Task<void> handle_plain(fiber::http::HttpExchange &exchange) {
     if (!header_result) {
         co_return;
     }
-    co_await exchange.write_body(body, std::strlen(body), true);
+    co_await exchange.write_body(reinterpret_cast<const uint8_t *>(body), std::strlen(body), true);
     co_return;
 }
 

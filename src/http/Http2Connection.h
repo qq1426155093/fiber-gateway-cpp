@@ -1,8 +1,8 @@
 #ifndef FIBER_HTTP_HTTP2_CONNECTION_H
 #define FIBER_HTTP_HTTP2_CONNECTION_H
 
+#include <coroutine>
 #include <cstdint>
-#include <deque>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -10,6 +10,7 @@
 #include <nghttp2/nghttp2.h>
 
 #include "../async/Task.h"
+#include "../async/WaitGroup.h"
 #include "../common/IoError.h"
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
@@ -33,6 +34,19 @@ public:
     void close();
 
 private:
+    class WriteWakeAwaiter {
+    public:
+        explicit WriteWakeAwaiter(Http2Connection &conn) noexcept : conn_(&conn) {
+        }
+
+        bool await_ready() const noexcept;
+        bool await_suspend(std::coroutine_handle<> handle) noexcept;
+        void await_resume() noexcept;
+
+    private:
+        Http2Connection *conn_ = nullptr;
+    };
+
     struct StreamContext {
         int32_t stream_id = 0;
         std::unique_ptr<HttpExchange> exchange;
@@ -40,7 +54,8 @@ private:
         bool headers_complete = false;
         bool request_end_stream = false;
         bool handler_started = false;
-        bool ready_queued = false;
+        bool handler_done = false;
+        bool remote_closed = false;
     };
 
     static int on_begin_headers_cb(nghttp2_session *session,
@@ -78,9 +93,17 @@ private:
 
     common::IoResult<StreamContext *> create_request_stream(int32_t stream_id);
     StreamContext *find_stream(int32_t stream_id) noexcept;
-    void mark_stream_ready(StreamContext &stream);
-    fiber::async::Task<void> dispatch_ready_streams();
-    fiber::async::Task<void> drain_writes();
+    void try_start_stream(StreamContext &stream);
+    void on_stream_handler_done(int32_t stream_id);
+    void maybe_reclaim_stream(int32_t stream_id);
+    fiber::async::Task<void> run_stream(int32_t stream_id);
+    fiber::async::Task<void> read_loop();
+    fiber::async::Task<void> write_loop();
+    WriteWakeAwaiter wait_write_ready() noexcept;
+    void notify_write_loop();
+    static void on_write_resume(Http2Connection *conn);
+    void request_stop();
+    void finalize_close();
     common::IoResult<void> pump_session_output();
     void request_flush();
     static common::IoErr map_nghttp2_error(int rc) noexcept;
@@ -94,13 +117,21 @@ private:
     nghttp2_session_callbacks *callbacks_ = nullptr;
     nghttp2_session *session_ = nullptr;
     std::unordered_map<int32_t, std::unique_ptr<StreamContext>> streams_;
-    std::deque<int32_t> ready_streams_;
 
     std::string tx_buffer_;
+    std::string tx_pending_buffer_;
     size_t tx_offset_ = 0;
     bool initialized_ = false;
-    bool closed_ = false;
-    bool write_pump_running_ = false;
+    bool running_ = false;
+    bool stop_requested_ = false;
+    bool finalized_ = false;
+
+    fiber::async::WaitGroup workers_{};
+
+    bool write_wakeup_ = false;
+    bool write_resume_posted_ = false;
+    std::coroutine_handle<> write_waiter_{};
+    event::EventLoop::NotifyEntry write_resume_entry_{};
 };
 
 } // namespace fiber::http

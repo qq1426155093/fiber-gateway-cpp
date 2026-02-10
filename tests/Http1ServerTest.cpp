@@ -102,7 +102,7 @@ TEST(Http1ServerTest, BasicGet) {
             if (!header_result) {
                 co_return;
             }
-            co_await exchange.write_body("ok", 2, true);
+            co_await exchange.write_body(reinterpret_cast<const uint8_t *>("ok"), 2, true);
             co_return;
         };
         return start_server(&group.at(0), handler, &port_promise, &server_promise);
@@ -172,7 +172,7 @@ TEST(Http1ServerTest, ChunkedPost) {
                 co_return;
             }
             if (!body.empty()) {
-                co_await exchange.write_body(body.data(), body.size(), true);
+                co_await exchange.write_body(reinterpret_cast<const uint8_t *>(body.data()), body.size(), true);
             } else {
                 co_await exchange.write_body(nullptr, 0, true);
             }
