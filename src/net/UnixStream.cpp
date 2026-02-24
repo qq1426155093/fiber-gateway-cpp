@@ -88,4 +88,20 @@ UnixStream::WritevAwaiter UnixStream::writev(const struct iovec *iov, int iovcnt
     return stream_.writev(iov, iovcnt);
 }
 
+fiber::common::IoResult<size_t> UnixStream::try_read(void *buf, size_t len) noexcept {
+    return stream_.try_read(buf, len);
+}
+
+fiber::common::IoResult<size_t> UnixStream::try_write(const void *buf, size_t len) noexcept {
+    return stream_.try_write(buf, len);
+}
+
+fiber::common::IoResult<size_t> UnixStream::try_readv(const struct iovec *iov, int iovcnt) noexcept {
+    return stream_.try_readv(iov, iovcnt);
+}
+
+fiber::common::IoResult<size_t> UnixStream::try_writev(const struct iovec *iov, int iovcnt) noexcept {
+    return stream_.try_writev(iov, iovcnt);
+}
+
 } // namespace fiber::net

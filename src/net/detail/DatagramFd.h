@@ -3,11 +3,13 @@
 
 #include <coroutine>
 #include <cstddef>
+#include <optional>
 #include "../../common/Assert.h"
 #include "../../common/IoError.h"
 #include "../../common/NonCopyable.h"
 #include "../../common/NonMovable.h"
 #include "../../event/EventLoop.h"
+#include "RWFd.h"
 #include "../SocketAddress.h"
 
 namespace fiber::net {
@@ -36,101 +38,19 @@ public:
     [[nodiscard]] RecvFromAwaiter recv_from(void *buf, size_t len) noexcept;
     [[nodiscard]] SendToAwaiter send_to(const void *buf, size_t len,
                                         const SocketAddress &peer) noexcept;
+    [[nodiscard]] fiber::common::IoResult<UdpRecvResult> try_recv_from(void *buf, size_t len) noexcept;
+    [[nodiscard]] fiber::common::IoResult<size_t> try_send_to(const void *buf,
+                                                              size_t len,
+                                                              const SocketAddress &peer) noexcept;
 
 private:
-    friend class RecvFromAwaiter;
-    friend class SendToAwaiter;
-
-    struct DatagramItem : fiber::event::Poller::Item {
-        DatagramFd *socket = nullptr;
-    };
-
-    struct WaiterBase {
-        fiber::event::IoEvent event_{};
-        fiber::common::IoErr err_{fiber::common::IoErr::None};
-        std::coroutine_handle<> coro_ = nullptr;
-    };
-
-    struct LocalThreadWaiter : WaiterBase {};
-
-    template<fiber::event::IoEvent Event>
-    LocalThreadWaiter *&waiter_slot() noexcept {
-        if constexpr (Event == fiber::event::IoEvent::Read) {
-            return read_waiter_;
-        }
-        return write_waiter_;
-    }
-
-    template<fiber::event::IoEvent Event>
-    fiber::common::IoErr begin_event(LocalThreadWaiter *waiter) noexcept {
-        static_assert(Event == fiber::event::IoEvent::Read || Event == fiber::event::IoEvent::Write);
-        FIBER_ASSERT(loop_.in_loop());
-        FIBER_ASSERT(waiter);
-        if (fd_ < 0) {
-            return fiber::common::IoErr::BadFd;
-        }
-
-        FIBER_ASSERT((watching_ & Event) == fiber::event::IoEvent::None);
-        fiber::event::IoEvent desired = watching_ | Event;
-
-        fiber::common::IoErr rc = fiber::common::IoErr::None;
-        if (!registered_) {
-            rc = loop_.poller().add(fd_, desired, &item_, fiber::event::Poller::Mode::OneShot);
-            if (rc == fiber::common::IoErr::None) {
-                registered_ = true;
-            }
-        } else {
-            rc = loop_.poller().mod(fd_, desired, &item_, fiber::event::Poller::Mode::OneShot);
-        }
-        if (rc != fiber::common::IoErr::None) {
-            return rc;
-        }
-        watching_ = desired;
-        auto &slot = waiter_slot<Event>();
-        FIBER_ASSERT(slot == nullptr);
-        slot = waiter;
-        return fiber::common::IoErr::None;
-    }
-
-    template<fiber::event::IoEvent Event>
-    fiber::common::IoErr cancel_event(LocalThreadWaiter *waiter) noexcept {
-        static_assert(Event == fiber::event::IoEvent::Read || Event == fiber::event::IoEvent::Write);
-        FIBER_ASSERT(loop_.in_loop());
-        FIBER_ASSERT(waiter);
-        auto &slot = waiter_slot<Event>();
-        FIBER_ASSERT(static_cast<void *>(slot) == static_cast<void *>(waiter));
-        slot = nullptr;
-        fiber::event::IoEvent desired = watching_ & ~Event;
-        if (desired == watching_) {
-            return fiber::common::IoErr::None;
-        }
-        fiber::common::IoErr io_err = fiber::common::IoErr::None;
-        if (registered_ && desired != fiber::event::IoEvent::None) {
-            io_err = loop_.poller().mod(fd_, desired, &item_, fiber::event::Poller::Mode::OneShot);
-        }
-        watching_ = desired;
-        return io_err;
-    }
-
     fiber::common::IoErr recv_from_once(void *buf, size_t len, SocketAddress &peer, size_t &out);
     fiber::common::IoErr send_to_once(const void *buf, size_t len, const SocketAddress &peer, size_t &out);
 
-    static void on_events(fiber::event::Poller::Item *item, int fd, fiber::event::IoEvent events);
-    void handle_events(fiber::event::IoEvent events);
-
-    static constexpr int kInvalidFd = -1;
-
-    fiber::event::EventLoop &loop_;
-    DatagramItem item_{};
-    int fd_ = kInvalidFd;
-    fiber::event::IoEvent watching_ = fiber::event::IoEvent::None;
-    bool registered_ = false;
-
-    LocalThreadWaiter *read_waiter_ = nullptr;
-    LocalThreadWaiter *write_waiter_ = nullptr;
+    RWFd rwfd_;
 };
 
-class DatagramFd::RecvFromAwaiter : public LocalThreadWaiter {
+class DatagramFd::RecvFromAwaiter {
 public:
     RecvFromAwaiter(DatagramFd &socket, void *buf, size_t len) noexcept;
 
@@ -149,12 +69,14 @@ private:
     void *buf_ = nullptr;
     size_t len_ = 0;
     SocketAddress peer_{};
+    fiber::common::IoErr err_{fiber::common::IoErr::None};
+    std::optional<RWFd::WaitReadableAwaiter> waiter_{};
     bool waiting_ = false;
     size_t result_ = 0;
     bool completed_ = false;
 };
 
-class DatagramFd::SendToAwaiter : public LocalThreadWaiter {
+class DatagramFd::SendToAwaiter {
 public:
     SendToAwaiter(DatagramFd &socket, const void *buf, size_t len, SocketAddress peer) noexcept;
 
@@ -173,6 +95,8 @@ private:
     const void *buf_ = nullptr;
     size_t len_ = 0;
     SocketAddress peer_{};
+    fiber::common::IoErr err_{fiber::common::IoErr::None};
+    std::optional<RWFd::WaitWritableAwaiter> waiter_{};
     bool waiting_ = false;
     size_t result_ = 0;
     bool completed_ = false;

@@ -35,4 +35,14 @@ UdpSocket::SendToAwaiter UdpSocket::send_to(const void *buf,
     return socket_.send_to(buf, len, peer);
 }
 
+fiber::common::IoResult<UdpRecvResult> UdpSocket::try_recv_from(void *buf, size_t len) noexcept {
+    return socket_.try_recv_from(buf, len);
+}
+
+fiber::common::IoResult<size_t> UdpSocket::try_send_to(const void *buf,
+                                                       size_t len,
+                                                       const SocketAddress &peer) noexcept {
+    return socket_.try_send_to(buf, len, peer);
+}
+
 } // namespace fiber::net

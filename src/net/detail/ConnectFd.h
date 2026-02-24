@@ -11,6 +11,7 @@
 #include "../../common/Assert.h"
 #include "../../common/IoError.h"
 #include "../../event/EventLoop.h"
+#include "Efd.h"
 
 namespace fiber::net::detail {
 
@@ -104,10 +105,7 @@ template <typename Traits>
 class ConnectFd<Traits>::ConnectAwaiter {
 public:
     ConnectAwaiter(fiber::event::EventLoop &loop, Address peer) noexcept
-        : loop_(&loop), peer_(std::move(peer)) {
-        item_.awaiter = this;
-        item_.callback = &ConnectAwaiter::on_connected;
-    }
+        : efd_(loop, this, &ConnectAwaiter::on_efd_events), peer_(std::move(peer)) {}
 
     ConnectAwaiter(const ConnectAwaiter &) = delete;
     ConnectAwaiter &operator=(const ConnectAwaiter &) = delete;
@@ -115,22 +113,18 @@ public:
     ConnectAwaiter &operator=(ConnectAwaiter &&) = delete;
 
     ~ConnectAwaiter() {
-        if (!loop_ || !waiting_) {
+        if (!waiting_) {
             close_fd();
             return;
         }
-        FIBER_ASSERT(loop_->in_loop());
+        FIBER_ASSERT(efd_.loop().in_loop());
         cancel_wait();
     }
 
     bool await_ready() noexcept { return false; }
 
     bool await_suspend(std::coroutine_handle<> handle) {
-        if (!loop_) {
-            result_ = std::unexpected(fiber::common::IoErr::Invalid);
-            return false;
-        }
-        FIBER_ASSERT(loop_->in_loop());
+        FIBER_ASSERT(efd_.loop().in_loop());
         handle_ = handle;
         result_ = std::unexpected(fiber::common::IoErr::Unknown);
 
@@ -139,12 +133,17 @@ public:
             result_ = std::unexpected(fd_result.error());
             return false;
         }
-        fd_ = *fd_result;
+        int socket_fd = *fd_result;
+        fiber::common::IoErr attach_err = efd_.attach(socket_fd);
+        if (attach_err != fiber::common::IoErr::None) {
+            result_ = std::unexpected(attach_err);
+            ::close(socket_fd);
+            return false;
+        }
 
-        fiber::common::IoErr err = Traits::connect_once(fd_, peer_);
+        fiber::common::IoErr err = Traits::connect_once(efd_.fd(), peer_);
         if (err == fiber::common::IoErr::None) {
-            result_ = ConnectResult(loop_, fd_, std::move(peer_));
-            fd_ = -1;
+            result_ = ConnectResult(&efd_.loop(), efd_.release_fd(), std::move(peer_));
             return false;
         }
         if (err != fiber::common::IoErr::WouldBlock) {
@@ -153,13 +152,12 @@ public:
             return false;
         }
 
-        fiber::common::IoErr watch_err = loop_->poller().add(fd_, fiber::event::IoEvent::Write, &item_);
+        fiber::common::IoErr watch_err = efd_.watch_add(fiber::event::IoEvent::Write);
         if (watch_err != fiber::common::IoErr::None) {
             result_ = std::unexpected(watch_err);
             close_fd();
             return false;
         }
-        watching_ = true;
         waiting_ = true;
         return true;
     }
@@ -169,26 +167,19 @@ public:
     }
 
 private:
-    struct ConnectItem : fiber::event::Poller::Item {
-        ConnectAwaiter *awaiter = nullptr;
-    };
-
     void close_fd() noexcept {
-        if (fd_ < 0) {
-            return;
-        }
-        ::close(fd_);
-        fd_ = -1;
+        efd_.close_fd();
     }
 
     fiber::common::IoErr finish_connect() noexcept {
-        if (fd_ < 0) {
+        int socket_fd = efd_.fd();
+        if (socket_fd < 0) {
             return fiber::common::IoErr::BadFd;
         }
         int socket_err = 0;
         socklen_t len = sizeof(socket_err);
         for (;;) {
-            if (::getsockopt(fd_, SOL_SOCKET, SO_ERROR, &socket_err, &len) == 0) {
+            if (::getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, &socket_err, &len) == 0) {
                 break;
             }
             if (errno == EINTR) {
@@ -207,16 +198,13 @@ private:
             return;
         }
         waiting_ = false;
-        if (watching_) {
-            loop_->poller().del(fd_);
-            watching_ = false;
-        }
+        (void) efd_.watch_del(fiber::event::IoEvent::Write);
         handle_ = {};
         close_fd();
     }
 
     void handle_connected(fiber::event::IoEvent events) {
-        FIBER_ASSERT(loop_ && loop_->in_loop());
+        FIBER_ASSERT(efd_.loop().in_loop());
         if (!waiting_) {
             return;
         }
@@ -224,15 +212,11 @@ private:
             return;
         }
         waiting_ = false;
-        if (watching_) {
-            loop_->poller().del(fd_);
-            watching_ = false;
-        }
+        (void) efd_.watch_del(fiber::event::IoEvent::Write);
 
         fiber::common::IoErr err = finish_connect();
         if (err == fiber::common::IoErr::None) {
-            result_ = ConnectResult(loop_, fd_, std::move(peer_));
-            fd_ = -1;
+            result_ = ConnectResult(&efd_.loop(), efd_.release_fd(), std::move(peer_));
         }
         if (err != fiber::common::IoErr::None) {
             result_ = std::unexpected(err);
@@ -246,25 +230,19 @@ private:
         }
     }
 
-    static void on_connected(fiber::event::Poller::Item *item,
-                             int fd,
-                             fiber::event::IoEvent events) {
-        (void) fd;
-        auto *entry = static_cast<ConnectItem *>(item);
-        if (!entry || !entry->awaiter) {
+    static void on_efd_events(void *owner, fiber::event::IoEvent events) {
+        auto *awaiter = static_cast<ConnectAwaiter *>(owner);
+        if (!awaiter) {
             return;
         }
-        entry->awaiter->handle_connected(events);
+        awaiter->handle_connected(events);
     }
 
-    fiber::event::EventLoop *loop_ = nullptr;
+    Efd efd_;
     Address peer_{};
     std::coroutine_handle<> handle_{};
     fiber::common::IoResult<ConnectResult> result_{std::unexpected(fiber::common::IoErr::Unknown)};
-    int fd_ = -1;
-    bool watching_ = false;
     bool waiting_ = false;
-    ConnectItem item_{};
 };
 
 } // namespace fiber::net::detail

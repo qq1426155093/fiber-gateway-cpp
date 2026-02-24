@@ -9,16 +9,13 @@
 
 namespace fiber::net::detail {
 
-DatagramFd::DatagramFd(fiber::event::EventLoop &loop) : loop_(loop) {
-    item_.socket = this;
-    item_.callback = &DatagramFd::on_events;
-}
+DatagramFd::DatagramFd(fiber::event::EventLoop &loop) : rwfd_(loop) {}
 
 DatagramFd::~DatagramFd() {
-    if (fd_ < 0) {
+    if (!rwfd_.valid()) {
         return;
     }
-    if (loop_.in_loop()) {
+    if (rwfd_.loop().in_loop()) {
         close();
         return;
     }
@@ -27,7 +24,7 @@ DatagramFd::~DatagramFd() {
 
 fiber::common::IoResult<void> DatagramFd::bind(const SocketAddress &addr,
                                                const UdpBindOptions &options) {
-    if (fd_ >= 0) {
+    if (rwfd_.valid()) {
         return std::unexpected(fiber::common::IoErr::Already);
     }
     sockaddr_storage storage{};
@@ -76,46 +73,24 @@ fiber::common::IoResult<void> DatagramFd::bind(const SocketAddress &addr,
         ::close(fd);
         return std::unexpected(err);
     }
-    fd_ = fd;
+    fiber::common::IoErr attach_err = rwfd_.attach(fd);
+    if (attach_err != fiber::common::IoErr::None) {
+        ::close(fd);
+        return std::unexpected(attach_err);
+    }
     return {};
 }
 
 bool DatagramFd::valid() const noexcept {
-    return fd_ >= 0;
+    return rwfd_.valid();
 }
 
 int DatagramFd::fd() const noexcept {
-    return fd_;
+    return rwfd_.fd();
 }
 
 void DatagramFd::close() {
-    FIBER_ASSERT(loop_.in_loop());
-    if (fd_ < 0) {
-        return;
-    }
-    if (registered_) {
-        loop_.poller().del(fd_);
-        registered_ = false;
-        watching_ = fiber::event::IoEvent::None;
-    }
-
-    if (read_waiter_) {
-        LocalThreadWaiter *waiter = read_waiter_;
-        read_waiter_ = nullptr;
-        waiter->err_ = fiber::common::IoErr::Canceled;
-        waiter->coro_.resume();
-    }
-
-    if (write_waiter_) {
-        LocalThreadWaiter *waiter = write_waiter_;
-        write_waiter_ = nullptr;
-        waiter->err_ = fiber::common::IoErr::Canceled;
-        waiter->coro_.resume();
-    }
-
-    int fd = fd_;
-    fd_ = kInvalidFd;
-    ::close(fd);
+    rwfd_.close();
 }
 
 DatagramFd::RecvFromAwaiter DatagramFd::recv_from(void *buf, size_t len) noexcept {
@@ -126,18 +101,40 @@ DatagramFd::SendToAwaiter DatagramFd::send_to(const void *buf, size_t len, const
     return {*this, buf, len, peer};
 }
 
+fiber::common::IoResult<UdpRecvResult> DatagramFd::try_recv_from(void *buf, size_t len) noexcept {
+    SocketAddress peer{};
+    size_t out = 0;
+    fiber::common::IoErr err = recv_from_once(buf, len, peer, out);
+    if (err == fiber::common::IoErr::None) {
+        return UdpRecvResult{out, peer};
+    }
+    return std::unexpected(err);
+}
+
+fiber::common::IoResult<size_t> DatagramFd::try_send_to(const void *buf,
+                                                        size_t len,
+                                                        const SocketAddress &peer) noexcept {
+    size_t out = 0;
+    fiber::common::IoErr err = send_to_once(buf, len, peer, out);
+    if (err == fiber::common::IoErr::None) {
+        return out;
+    }
+    return std::unexpected(err);
+}
+
 fiber::common::IoErr DatagramFd::recv_from_once(void *buf,
                                                 size_t len,
                                                 SocketAddress &peer,
                                                 size_t &out) {
     out = 0;
-    if (fd_ < 0) {
+    int socket_fd = rwfd_.fd();
+    if (socket_fd < 0) {
         return fiber::common::IoErr::BadFd;
     }
     for (;;) {
         sockaddr_storage addr{};
         socklen_t addr_len = sizeof(addr);
-        ssize_t rc = ::recvfrom(fd_, buf, len, 0, reinterpret_cast<sockaddr *>(&addr), &addr_len);
+        ssize_t rc = ::recvfrom(socket_fd, buf, len, 0, reinterpret_cast<sockaddr *>(&addr), &addr_len);
         if (rc >= 0) {
             out = static_cast<size_t>(rc);
             SocketAddress parsed;
@@ -163,7 +160,8 @@ fiber::common::IoErr DatagramFd::send_to_once(const void *buf,
                                               const SocketAddress &peer,
                                               size_t &out) {
     out = 0;
-    if (fd_ < 0) {
+    int socket_fd = rwfd_.fd();
+    if (socket_fd < 0) {
         return fiber::common::IoErr::BadFd;
     }
     sockaddr_storage storage{};
@@ -172,7 +170,7 @@ fiber::common::IoErr DatagramFd::send_to_once(const void *buf,
         return fiber::common::IoErr::NotSupported;
     }
     for (;;) {
-        ssize_t rc = ::sendto(fd_, buf, len, 0,
+        ssize_t rc = ::sendto(socket_fd, buf, len, 0,
                               reinterpret_cast<const sockaddr *>(&storage), addr_len);
         if (rc >= 0) {
             out = static_cast<size_t>(rc);
@@ -189,58 +187,13 @@ fiber::common::IoErr DatagramFd::send_to_once(const void *buf,
     }
 }
 
-void DatagramFd::handle_events(fiber::event::IoEvent events) {
-    FIBER_ASSERT(loop_.in_loop());
-    if (!fiber::event::any(events)) {
-        return;
-    }
-    fiber::event::IoEvent desired = watching_ & ~events;
-    if (desired != fiber::event::IoEvent::None) {
-        loop_.poller().mod(fd_, desired, &item_, fiber::event::Poller::Mode::OneShot);
-    }
-    watching_ = desired;
-
-    if (fiber::event::any(events & fiber::event::IoEvent::Read)) {
-        LocalThreadWaiter *waiter = read_waiter_;
-        FIBER_ASSERT(waiter);
-        read_waiter_ = nullptr;
-        waiter->coro_.resume();
-    }
-    if (fiber::event::any(events & fiber::event::IoEvent::Write)) {
-        LocalThreadWaiter *waiter = write_waiter_;
-        FIBER_ASSERT(waiter);
-        write_waiter_ = nullptr;
-        waiter->coro_.resume();
-    }
-}
-
-void DatagramFd::on_events(fiber::event::Poller::Item *item,
-                           int fd,
-                           fiber::event::IoEvent events) {
-    (void) fd;
-    auto *socket_item = static_cast<DatagramItem *>(item);
-    if (!socket_item->socket) {
-        return;
-    }
-    socket_item->socket->handle_events(events);
-}
-
 DatagramFd::RecvFromAwaiter::RecvFromAwaiter(DatagramFd &socket, void *buf, size_t len) noexcept
-    : socket_(&socket), buf_(buf), len_(len) {
-    event_ = fiber::event::IoEvent::Read;
-}
+    : socket_(&socket), buf_(buf), len_(len) {}
 
 DatagramFd::RecvFromAwaiter::~RecvFromAwaiter() {
-    if (!waiting_) {
-        return;
-    }
-    FIBER_ASSERT(socket_->loop_.in_loop());
-    socket_->cancel_event<fiber::event::IoEvent::Read>(this);
 }
 
 bool DatagramFd::RecvFromAwaiter::await_suspend(std::coroutine_handle<> handle) {
-    FIBER_ASSERT(socket_->loop_.in_loop());
-    coro_ = handle;
     err_ = fiber::common::IoErr::None;
     completed_ = false;
 
@@ -258,14 +211,8 @@ bool DatagramFd::RecvFromAwaiter::await_suspend(std::coroutine_handle<> handle) 
     }
 
     waiting_ = true;
-    fiber::common::IoErr watch_err = socket_->begin_event<fiber::event::IoEvent::Read>(this);
-    if (watch_err != fiber::common::IoErr::None) {
-        err_ = watch_err;
-        completed_ = true;
-        waiting_ = false;
-        return false;
-    }
-    return true;
+    waiter_.emplace(socket_->rwfd_);
+    return waiter_->await_suspend(handle);
 }
 
 fiber::common::IoResult<UdpRecvResult> DatagramFd::RecvFromAwaiter::await_resume() noexcept {
@@ -278,8 +225,12 @@ fiber::common::IoResult<UdpRecvResult> DatagramFd::RecvFromAwaiter::await_resume
         return std::unexpected(err_);
     }
 
-    if (err_ != fiber::common::IoErr::None) {
-        return std::unexpected(err_);
+    if (waiter_) {
+        fiber::common::IoResult<void> wait_result = waiter_->await_resume();
+        waiter_.reset();
+        if (!wait_result) {
+            return std::unexpected(wait_result.error());
+        }
     }
 
     size_t out = 0;
@@ -294,21 +245,12 @@ DatagramFd::SendToAwaiter::SendToAwaiter(DatagramFd &socket,
                                          const void *buf,
                                          size_t len,
                                          SocketAddress peer) noexcept
-    : socket_(&socket), buf_(buf), len_(len), peer_(std::move(peer)) {
-    event_ = fiber::event::IoEvent::Write;
-}
+    : socket_(&socket), buf_(buf), len_(len), peer_(std::move(peer)) {}
 
 DatagramFd::SendToAwaiter::~SendToAwaiter() {
-    if (!waiting_) {
-        return;
-    }
-    FIBER_ASSERT(socket_->loop_.in_loop());
-    socket_->cancel_event<fiber::event::IoEvent::Write>(this);
 }
 
 bool DatagramFd::SendToAwaiter::await_suspend(std::coroutine_handle<> handle) {
-    FIBER_ASSERT(socket_->loop_.in_loop());
-    coro_ = handle;
     err_ = fiber::common::IoErr::None;
     completed_ = false;
 
@@ -326,14 +268,8 @@ bool DatagramFd::SendToAwaiter::await_suspend(std::coroutine_handle<> handle) {
     }
 
     waiting_ = true;
-    fiber::common::IoErr watch_err = socket_->begin_event<fiber::event::IoEvent::Write>(this);
-    if (watch_err != fiber::common::IoErr::None) {
-        err_ = watch_err;
-        completed_ = true;
-        waiting_ = false;
-        return false;
-    }
-    return true;
+    waiter_.emplace(socket_->rwfd_);
+    return waiter_->await_suspend(handle);
 }
 
 fiber::common::IoResult<size_t> DatagramFd::SendToAwaiter::await_resume() noexcept {
@@ -346,8 +282,12 @@ fiber::common::IoResult<size_t> DatagramFd::SendToAwaiter::await_resume() noexce
         return std::unexpected(err_);
     }
 
-    if (err_ != fiber::common::IoErr::None) {
-        return std::unexpected(err_);
+    if (waiter_) {
+        fiber::common::IoResult<void> wait_result = waiter_->await_resume();
+        waiter_.reset();
+        if (!wait_result) {
+            return std::unexpected(wait_result.error());
+        }
     }
 
     size_t out = 0;
