@@ -20,7 +20,7 @@ constexpr std::string_view kAlpnH2 = "h2";
 constexpr std::string_view kAlpnHttp11 = "http/1.1";
 
 bool contains_alpn(const std::vector<std::string> &alpn, std::string_view target) {
-    for (const auto &proto : alpn) {
+    for (const auto &proto: alpn) {
         if (proto == target) {
             return true;
         }
@@ -41,7 +41,7 @@ void normalize_auto_alpn(TlsOptions &options) {
     normalized.emplace_back(kAlpnH2);
     normalized.emplace_back(kAlpnHttp11);
 
-    for (const auto &proto : options.alpn) {
+    for (const auto &proto: options.alpn) {
         if (proto.empty() || proto == kAlpnH2 || proto == kAlpnHttp11) {
             continue;
         }
@@ -53,15 +53,10 @@ void normalize_auto_alpn(TlsOptions &options) {
 
 } // namespace
 
-HttpServer::HttpServer(event::EventLoop &loop, HttpHandler handler, HttpServerOptions options)
-    : loop_(loop),
-      handler_(std::move(handler)),
-      options_(std::move(options)),
-      listener_(loop) {
-}
+HttpServer::HttpServer(event::EventLoop &loop, HttpHandler handler, HttpServerOptions options) :
+    loop_(loop), handler_(std::move(handler)), options_(std::move(options)), listener_(loop) {}
 
-fiber::common::IoResult<void> HttpServer::bind(const net::SocketAddress &addr,
-                                               const net::ListenOptions &options) {
+fiber::common::IoResult<void> HttpServer::bind(const net::SocketAddress &addr, const net::ListenOptions &options) {
     auto result = listener_.bind(addr, options);
     if (!result) {
         return std::unexpected(result.error());
@@ -82,8 +77,7 @@ fiber::async::DetachedTask HttpServer::serve() {
     while (listener_.valid()) {
         auto accept_result = co_await listener_.accept();
         if (!accept_result) {
-            if (accept_result.error() == common::IoErr::Canceled ||
-                accept_result.error() == common::IoErr::BadFd) {
+            if (accept_result.error() == common::IoErr::Canceled || accept_result.error() == common::IoErr::BadFd) {
                 break;
             }
             continue;
@@ -98,8 +92,7 @@ fiber::async::DetachedTask HttpServer::serve() {
 }
 
 fiber::async::DetachedTask HttpServer::handle_connection(net::AcceptResult accept) {
-    std::unique_ptr<net::TcpStream> stream =
-        std::make_unique<net::TcpStream>(loop_, accept.fd, std::move(accept.peer));
+    std::unique_ptr<net::TcpStream> stream = std::make_unique<net::TcpStream>(loop_, accept.fd, std::move(accept.peer));
 
     std::unique_ptr<HttpTransport> transport;
     bool use_http2 = false;
@@ -107,7 +100,12 @@ fiber::async::DetachedTask HttpServer::handle_connection(net::AcceptResult accep
         if (!tls_ctx_) {
             co_return;
         }
-        auto tls_result = TlsTransport::create(std::move(stream), *tls_ctx_);
+        int fd = stream->release_fd();
+        if (fd < 0) {
+            co_return;
+        }
+        auto tls_stream = std::make_unique<net::TlsTcpStream>(stream->loop(), fd, stream->remote_addr());
+        auto tls_result = TlsTransport::create(std::move(tls_stream), *tls_ctx_);
         if (!tls_result) {
             co_return;
         }
@@ -166,12 +164,8 @@ fiber::async::Task<void> HttpServer::serve_http2(std::unique_ptr<HttpTransport> 
     co_return;
 }
 
-void HttpServer::close() {
-    listener_.close();
-}
+void HttpServer::close() { listener_.close(); }
 
-int HttpServer::fd() const noexcept {
-    return listener_.fd();
-}
+int HttpServer::fd() const noexcept { return listener_.fd(); }
 
 } // namespace fiber::http

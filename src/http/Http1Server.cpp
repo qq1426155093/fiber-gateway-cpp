@@ -9,14 +9,9 @@
 namespace fiber::http {
 
 Http1Server::Http1Server(event::EventLoop &loop, HttpHandler handler, HttpServerOptions options) :
-    loop_(loop),
-    handler_(std::move(handler)),
-    options_(std::move(options)),
-    listener_(loop) {
-}
+    loop_(loop), handler_(std::move(handler)), options_(std::move(options)), listener_(loop) {}
 
-fiber::common::IoResult<void> Http1Server::bind(const net::SocketAddress &addr,
-                                                const net::ListenOptions &options) {
+fiber::common::IoResult<void> Http1Server::bind(const net::SocketAddress &addr, const net::ListenOptions &options) {
     auto result = listener_.bind(addr, options);
     if (!result) {
         return std::unexpected(result.error());
@@ -36,8 +31,7 @@ fiber::async::DetachedTask Http1Server::serve() {
     while (listener_.valid()) {
         auto accept_result = co_await listener_.accept();
         if (!accept_result) {
-            if (accept_result.error() == common::IoErr::Canceled ||
-                accept_result.error() == common::IoErr::BadFd) {
+            if (accept_result.error() == common::IoErr::Canceled || accept_result.error() == common::IoErr::BadFd) {
                 break;
             }
             continue;
@@ -45,13 +39,18 @@ fiber::async::DetachedTask Http1Server::serve() {
         auto accept = *accept_result;
         fiber::async::spawn(loop_, [this, accept = std::move(accept)]() mutable -> fiber::async::DetachedTask {
             std::unique_ptr<net::TcpStream> stream =
-                std::make_unique<net::TcpStream>(loop_, accept.fd, std::move(accept.peer));
+                    std::make_unique<net::TcpStream>(loop_, accept.fd, std::move(accept.peer));
             std::unique_ptr<HttpTransport> transport;
             if (options_.tls.enabled) {
                 if (!tls_ctx_) {
                     co_return;
                 }
-                auto tls_result = TlsTransport::create(std::move(stream), *tls_ctx_);
+                int fd = stream->release_fd();
+                if (fd < 0) {
+                    co_return;
+                }
+                auto tls_stream = std::make_unique<net::TlsTcpStream>(stream->loop(), fd, stream->remote_addr());
+                auto tls_result = TlsTransport::create(std::move(tls_stream), *tls_ctx_);
                 if (!tls_result) {
                     co_return;
                 }
@@ -85,12 +84,8 @@ fiber::async::DetachedTask Http1Server::serve() {
     co_return;
 }
 
-void Http1Server::close() {
-    listener_.close();
-}
+void Http1Server::close() { listener_.close(); }
 
-int Http1Server::fd() const noexcept {
-    return listener_.fd();
-}
+int Http1Server::fd() const noexcept { return listener_.fd(); }
 
 } // namespace fiber::http

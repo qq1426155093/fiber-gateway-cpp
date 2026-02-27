@@ -149,10 +149,8 @@ fiber::async::Task<void> handle_plain(fiber::http::HttpExchange &exchange) {
     co_return;
 }
 
-fiber::async::DetachedTask run_demo_client(fiber::event::EventLoop *loop,
-                                           fiber::http::Http1Server *server,
-                                           std::uint16_t port,
-                                           bool *ok) {
+fiber::async::DetachedTask run_demo_client(fiber::event::EventLoop *loop, fiber::http::Http1Server *server,
+                                           std::uint16_t port, bool *ok) {
     auto fail = [&](std::string_view message, fiber::common::IoErr err) {
         std::cerr << message << ": " << fiber::common::io_err_name(err) << '\n';
         if (ok) {
@@ -184,7 +182,13 @@ fiber::async::DetachedTask run_demo_client(fiber::event::EventLoop *loop,
         co_return;
     }
 
-    auto transport_result = fiber::http::TlsTransport::create(std::move(stream), client_ctx);
+    int fd = stream->release_fd();
+    if (fd < 0) {
+        fail("tls stream release fd failed", fiber::common::IoErr::BadFd);
+        co_return;
+    }
+    auto tls_stream = std::make_unique<fiber::net::TlsTcpStream>(stream->loop(), fd, stream->remote_addr());
+    auto transport_result = fiber::http::TlsTransport::create(std::move(tls_stream), client_ctx);
     if (!transport_result) {
         fail("tls transport create failed", transport_result.error());
         co_return;
@@ -197,17 +201,15 @@ fiber::async::DetachedTask run_demo_client(fiber::event::EventLoop *loop,
         co_return;
     }
 
-    const char *request =
-        "GET / HTTP/1.1\r\n"
-        "Host: localhost\r\n"
-        "Connection: close\r\n"
-        "\r\n";
+    const char *request = "GET / HTTP/1.1\r\n"
+                          "Host: localhost\r\n"
+                          "Connection: close\r\n"
+                          "\r\n";
     size_t request_len = std::strlen(request);
     size_t write_offset = 0;
     while (write_offset < request_len) {
-        auto write_result = co_await transport->write(request + write_offset,
-                                                      request_len - write_offset,
-                                                      std::chrono::seconds(5));
+        auto write_result =
+                co_await transport->write(request + write_offset, request_len - write_offset, std::chrono::seconds(5));
         if (!write_result || *write_result == 0) {
             auto err = write_result ? fiber::common::IoErr::BrokenPipe : write_result.error();
             fail("client write failed", err);
@@ -219,9 +221,7 @@ fiber::async::DetachedTask run_demo_client(fiber::event::EventLoop *loop,
     std::string response;
     std::array<char, 4096> buffer{};
     for (;;) {
-        auto read_result = co_await transport->read(buffer.data(),
-                                                    buffer.size(),
-                                                    std::chrono::seconds(5));
+        auto read_result = co_await transport->read(buffer.data(), buffer.size(), std::chrono::seconds(5));
         if (!read_result) {
             fail("client read failed", read_result.error());
             co_return;
@@ -294,15 +294,11 @@ int main(int argc, char **argv) {
         std::cout << "listening on https://127.0.0.1\n";
     }
 
-    fiber::async::spawn(loop, [&]() {
-        return server.serve();
-    });
+    fiber::async::spawn(loop, [&]() { return server.serve(); });
 
     if (demo) {
         bool ok = true;
-        fiber::async::spawn(loop, [&]() {
-            return run_demo_client(&loop, &server, effective_port, &ok);
-        });
+        fiber::async::spawn(loop, [&]() { return run_demo_client(&loop, &server, effective_port, &ok); });
         loop.run();
         return ok ? 0 : 1;
     }

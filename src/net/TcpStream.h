@@ -43,6 +43,7 @@ public:
     [[nodiscard]] int fd() const noexcept;
     [[nodiscard]] fiber::event::EventLoop &loop() const noexcept;
     [[nodiscard]] const SocketAddress &remote_addr() const noexcept;
+    int release_fd() noexcept;
     void close();
 
     [[nodiscard]] ReadAwaiter read(void *buf, size_t len) noexcept;

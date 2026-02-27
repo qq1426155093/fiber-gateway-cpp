@@ -248,9 +248,9 @@ public:
         waiter->coro_ = handle;
         waiter->loop_ = current;
         waiter_ = waiter;
-        rwfd_->loop().post<RWFdCrossThreadWaiter,
-                           &RWFdCrossThreadWaiter::notify_entry_,
-                           &RWFdCrossThreadWaiter::on_notify_watch>(*waiter);
+        rwfd_->loop()
+                .post<RWFdCrossThreadWaiter, &RWFdCrossThreadWaiter::notify_entry_,
+                      &RWFdCrossThreadWaiter::on_notify_watch>(*waiter);
         return true;
     }
 

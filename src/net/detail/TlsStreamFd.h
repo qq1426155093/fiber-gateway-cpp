@@ -1,16 +1,15 @@
 #ifndef FIBER_NET_DETAIL_TLS_STREAM_FD_H
 #define FIBER_NET_DETAIL_TLS_STREAM_FD_H
 
-#include <atomic>
 #include <coroutine>
 #include <cstddef>
-#include <cstdint>
+#include <optional>
 #include <string>
 
 #include "../../common/IoError.h"
 #include "../../common/NonCopyable.h"
 #include "../../common/NonMovable.h"
-#include "../../event/EventLoop.h"
+#include "StreamFd.h"
 
 struct ssl_ctx_st;
 typedef struct ssl_ctx_st SSL_CTX;
@@ -19,31 +18,6 @@ typedef struct ssl_st SSL;
 
 namespace fiber::net::detail {
 
-class TlsStreamFd;
-
-using TlsOpFn = fiber::common::IoErr (*)(TlsStreamFd &, void *, fiber::event::IoEvent &);
-
-struct TlsWaiterBase {
-    TlsStreamFd *stream_ = nullptr;
-    fiber::event::IoEvent event_{};
-    fiber::common::IoErr err_{fiber::common::IoErr::None};
-    std::coroutine_handle<> coro_ = nullptr;
-    void *op_ctx_ = nullptr;
-    TlsOpFn op_ = nullptr;
-};
-
-struct TlsLocalThreadWaiter : TlsWaiterBase {};
-struct TlsCrossThreadWaiter;
-
-enum class TlsWaiterState : std::uint8_t {
-    Notify_Watch,
-    Notify_Resume,
-    Watching_Event,
-    Request_Cancel,
-    Waiting_Cancel,
-    Canceled,
-};
-
 class TlsStreamFd : public common::NonCopyable, public common::NonMovable {
 public:
     class ReadAwaiter;
@@ -51,13 +25,14 @@ public:
     class HandshakeAwaiter;
     class ShutdownAwaiter;
 
-    TlsStreamFd(fiber::event::EventLoop &loop, int fd, bool owns_fd = false);
+    TlsStreamFd(fiber::event::EventLoop &loop, int fd);
     ~TlsStreamFd();
 
     common::IoResult<void> init(SSL_CTX *ctx, bool is_server);
 
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] int fd() const noexcept;
+    [[nodiscard]] fiber::event::EventLoop &loop() const noexcept;
     [[nodiscard]] std::string selected_alpn() const noexcept;
     void close();
 
@@ -69,62 +44,23 @@ public:
     [[nodiscard]] ShutdownAwaiter shutdown() noexcept;
 
 private:
-    friend struct TlsCrossThreadWaiter;
-
-    struct StreamItem : fiber::event::Poller::Item {
-        TlsStreamFd *stream = nullptr;
-    };
-
-    struct StartResult {
-        bool waiting = false;
-        fiber::common::IoErr err = fiber::common::IoErr::None;
-    };
-
-    StartResult start_op(TlsWaiterBase *waiter, bool local) noexcept;
-    void complete_wait(TlsWaiterBase *waiter, fiber::common::IoErr err) noexcept;
-    fiber::common::IoErr begin_event(TlsWaiterBase *waiter, fiber::event::IoEvent event, bool local) noexcept;
-    fiber::common::IoErr arm_event(TlsWaiterBase *waiter, fiber::event::IoEvent event) noexcept;
-    fiber::common::IoErr cancel_event(TlsWaiterBase *waiter) noexcept;
+    friend class ReadAwaiter;
+    friend class WriteAwaiter;
+    friend class HandshakeAwaiter;
+    friend class ShutdownAwaiter;
 
     fiber::common::IoErr handshake_once(fiber::event::IoEvent &event) noexcept;
     fiber::common::IoErr shutdown_once(fiber::event::IoEvent &event) noexcept;
     fiber::common::IoErr read_once(void *buf, size_t len, size_t &out, fiber::event::IoEvent &event) noexcept;
     fiber::common::IoErr write_once(const void *buf, size_t len, size_t &out, fiber::event::IoEvent &event) noexcept;
 
-    static void on_events(fiber::event::Poller::Item *item, int fd, fiber::event::IoEvent events);
-    void handle_events(fiber::event::IoEvent events);
-
-    fiber::event::EventLoop &loop_;
-    StreamItem item_{};
-    int fd_ = -1;
-    bool owns_fd_ = false;
-    fiber::event::IoEvent watching_ = fiber::event::IoEvent::None;
-    bool registered_ = false;
-    bool busy_ = false;
-    bool local_waiting_ = false;
-    union {
-        TlsLocalThreadWaiter *local_waiter_ = nullptr;
-        TlsCrossThreadWaiter *cross_waiter_;
-    };
+    StreamFd stream_fd_;
     SSL *ssl_ = nullptr;
     bool handshake_done_ = false;
+    bool busy_ = false;
 };
 
-struct TlsCrossThreadWaiter : TlsWaiterBase {
-    fiber::event::EventLoop *loop_ = nullptr;
-    fiber::event::EventLoop::NotifyEntry notify_entry_{};
-    fiber::event::EventLoop::NotifyEntry cancel_entry_{};
-    std::atomic<TlsWaiterState> state_{TlsWaiterState::Notify_Watch};
-
-    void cancel_wait() noexcept;
-
-    static void do_notify_resume(TlsCrossThreadWaiter *waiter) noexcept;
-    static void on_notify_watch(TlsCrossThreadWaiter *waiter);
-    static void on_notify_cancel(TlsCrossThreadWaiter *waiter);
-    static void on_notify_resume(TlsCrossThreadWaiter *waiter);
-};
-
-class TlsStreamFd::ReadAwaiter : public TlsLocalThreadWaiter {
+class TlsStreamFd::ReadAwaiter {
 public:
     ReadAwaiter(TlsStreamFd &stream, void *buf, size_t len) noexcept;
 
@@ -139,17 +75,18 @@ public:
     fiber::common::IoResult<size_t> await_resume() noexcept;
 
 private:
-    static fiber::common::IoErr do_op(TlsStreamFd &stream, void *ctx, fiber::event::IoEvent &event);
-
+    TlsStreamFd *stream_ = nullptr;
     void *buf_ = nullptr;
     size_t len_ = 0;
     size_t result_ = 0;
+    fiber::common::IoErr err_ = fiber::common::IoErr::None;
+    std::optional<StreamFd::WaitReadableAwaiter> read_waiter_{};
+    std::optional<StreamFd::WaitWritableAwaiter> write_waiter_{};
     bool waiting_ = false;
     bool completed_ = false;
-    TlsCrossThreadWaiter *waiter_ = nullptr;
 };
 
-class TlsStreamFd::WriteAwaiter : public TlsLocalThreadWaiter {
+class TlsStreamFd::WriteAwaiter {
 public:
     WriteAwaiter(TlsStreamFd &stream, const void *buf, size_t len) noexcept;
 
@@ -164,17 +101,18 @@ public:
     fiber::common::IoResult<size_t> await_resume() noexcept;
 
 private:
-    static fiber::common::IoErr do_op(TlsStreamFd &stream, void *ctx, fiber::event::IoEvent &event);
-
+    TlsStreamFd *stream_ = nullptr;
     const void *buf_ = nullptr;
     size_t len_ = 0;
     size_t result_ = 0;
+    fiber::common::IoErr err_ = fiber::common::IoErr::None;
+    std::optional<StreamFd::WaitReadableAwaiter> read_waiter_{};
+    std::optional<StreamFd::WaitWritableAwaiter> write_waiter_{};
     bool waiting_ = false;
     bool completed_ = false;
-    TlsCrossThreadWaiter *waiter_ = nullptr;
 };
 
-class TlsStreamFd::HandshakeAwaiter : public TlsLocalThreadWaiter {
+class TlsStreamFd::HandshakeAwaiter {
 public:
     explicit HandshakeAwaiter(TlsStreamFd &stream) noexcept;
 
@@ -189,14 +127,15 @@ public:
     fiber::common::IoResult<void> await_resume() noexcept;
 
 private:
-    static fiber::common::IoErr do_op(TlsStreamFd &stream, void *ctx, fiber::event::IoEvent &event);
-
+    TlsStreamFd *stream_ = nullptr;
+    fiber::common::IoErr err_ = fiber::common::IoErr::None;
+    std::optional<StreamFd::WaitReadableAwaiter> read_waiter_{};
+    std::optional<StreamFd::WaitWritableAwaiter> write_waiter_{};
     bool waiting_ = false;
     bool completed_ = false;
-    TlsCrossThreadWaiter *waiter_ = nullptr;
 };
 
-class TlsStreamFd::ShutdownAwaiter : public TlsLocalThreadWaiter {
+class TlsStreamFd::ShutdownAwaiter {
 public:
     explicit ShutdownAwaiter(TlsStreamFd &stream) noexcept;
 
@@ -211,11 +150,12 @@ public:
     fiber::common::IoResult<void> await_resume() noexcept;
 
 private:
-    static fiber::common::IoErr do_op(TlsStreamFd &stream, void *ctx, fiber::event::IoEvent &event);
-
+    TlsStreamFd *stream_ = nullptr;
+    fiber::common::IoErr err_ = fiber::common::IoErr::None;
+    std::optional<StreamFd::WaitReadableAwaiter> read_waiter_{};
+    std::optional<StreamFd::WaitWritableAwaiter> write_waiter_{};
     bool waiting_ = false;
     bool completed_ = false;
-    TlsCrossThreadWaiter *waiter_ = nullptr;
 };
 
 } // namespace fiber::net::detail

@@ -72,6 +72,8 @@ public:
     using WriteAwaiter = ReadWriteAwaiter<WriteOp>;
     using ReadvAwaiter = ReadWriteAwaiter<ReadvOp>;
     using WritevAwaiter = ReadWriteAwaiter<WritevOp>;
+    using WaitReadableAwaiter = RWFd::WaitReadableAwaiter;
+    using WaitWritableAwaiter = RWFd::WaitWritableAwaiter;
 
     StreamFd(fiber::event::EventLoop &loop, int fd);
     ~StreamFd();
@@ -79,12 +81,16 @@ public:
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] int fd() const noexcept;
     [[nodiscard]] fiber::event::EventLoop &loop() const noexcept;
+    [[nodiscard]] RWFd &rwfd() noexcept;
+    int release_fd() noexcept;
     void close();
 
     [[nodiscard]] ReadAwaiter read(void *buf, size_t len) noexcept;
     [[nodiscard]] WriteAwaiter write(const void *buf, size_t len) noexcept;
     [[nodiscard]] ReadvAwaiter readv(const struct iovec *iov, int iovcnt) noexcept;
     [[nodiscard]] WritevAwaiter writev(const struct iovec *iov, int iovcnt) noexcept;
+    [[nodiscard]] WaitReadableAwaiter wait_readable() noexcept;
+    [[nodiscard]] WaitWritableAwaiter wait_writable() noexcept;
     [[nodiscard]] fiber::common::IoResult<size_t> try_read(void *buf, size_t len) noexcept;
     [[nodiscard]] fiber::common::IoResult<size_t> try_write(const void *buf, size_t len) noexcept;
     [[nodiscard]] fiber::common::IoResult<size_t> try_readv(const struct iovec *iov, int iovcnt) noexcept;
@@ -107,9 +113,8 @@ class StreamFd::ReadWriteAwaiter {
 public:
     template<typename... Args>
         requires(std::is_constructible_v<Op, Args...>)
-    ReadWriteAwaiter(StreamFd &stream, Args &&...args) noexcept(std::is_nothrow_constructible_v<Op, Args...>)
-        : stream_(&stream), op_(std::forward<Args>(args)...) {
-    }
+    ReadWriteAwaiter(StreamFd &stream, Args &&...args) noexcept(std::is_nothrow_constructible_v<Op, Args...>) :
+        stream_(&stream), op_(std::forward<Args>(args)...) {}
 
     ReadWriteAwaiter(const ReadWriteAwaiter &) = delete;
     ReadWriteAwaiter &operator=(const ReadWriteAwaiter &) = delete;

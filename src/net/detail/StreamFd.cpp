@@ -27,6 +27,10 @@ int StreamFd::fd() const noexcept { return rwfd_.fd(); }
 
 fiber::event::EventLoop &StreamFd::loop() const noexcept { return rwfd_.loop(); }
 
+RWFd &StreamFd::rwfd() noexcept { return rwfd_; }
+
+int StreamFd::release_fd() noexcept { return rwfd_.release_fd(); }
+
 void StreamFd::close() { rwfd_.close(); }
 
 StreamFd::ReadAwaiter StreamFd::read(void *buf, size_t len) noexcept { return {*this, buf, len}; }
@@ -36,6 +40,10 @@ StreamFd::WriteAwaiter StreamFd::write(const void *buf, size_t len) noexcept { r
 StreamFd::ReadvAwaiter StreamFd::readv(const struct iovec *iov, int iovcnt) noexcept { return {*this, iov, iovcnt}; }
 
 StreamFd::WritevAwaiter StreamFd::writev(const struct iovec *iov, int iovcnt) noexcept { return {*this, iov, iovcnt}; }
+
+StreamFd::WaitReadableAwaiter StreamFd::wait_readable() noexcept { return rwfd_.wait_readable(); }
+
+StreamFd::WaitWritableAwaiter StreamFd::wait_writable() noexcept { return rwfd_.wait_writable(); }
 
 fiber::common::IoResult<size_t> StreamFd::try_read(void *buf, size_t len) noexcept {
     size_t out = 0;

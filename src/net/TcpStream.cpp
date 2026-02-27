@@ -40,47 +40,31 @@ fiber::common::IoErr TcpConnectTraits::connect_once(int fd, const SocketAddress 
     }
 }
 
-TcpStream::TcpStream(fiber::event::EventLoop &loop, int fd) : stream_(loop, fd) {
-}
+TcpStream::TcpStream(fiber::event::EventLoop &loop, int fd) : stream_(loop, fd) {}
 
-TcpStream::TcpStream(fiber::event::EventLoop &loop, int fd, SocketAddress peer)
-    : stream_(loop, fd), remote_addr_(std::move(peer)) {
-}
+TcpStream::TcpStream(fiber::event::EventLoop &loop, int fd, SocketAddress peer) :
+    stream_(loop, fd), remote_addr_(std::move(peer)) {}
 
-TcpStream::TcpStream(ConnectInfant &&infant)
-    : stream_(infant.loop(), infant.release_fd()), remote_addr_(infant.take_peer()) {
-}
+TcpStream::TcpStream(ConnectInfant &&infant) :
+    stream_(infant.loop(), infant.release_fd()), remote_addr_(infant.take_peer()) {}
 
-TcpStream::~TcpStream() {
-}
+TcpStream::~TcpStream() {}
 
-bool TcpStream::valid() const noexcept {
-    return stream_.valid();
-}
+bool TcpStream::valid() const noexcept { return stream_.valid(); }
 
-int TcpStream::fd() const noexcept {
-    return stream_.fd();
-}
+int TcpStream::fd() const noexcept { return stream_.fd(); }
 
-fiber::event::EventLoop &TcpStream::loop() const noexcept {
-    return stream_.loop();
-}
+fiber::event::EventLoop &TcpStream::loop() const noexcept { return stream_.loop(); }
 
-const SocketAddress &TcpStream::remote_addr() const noexcept {
-    return remote_addr_;
-}
+const SocketAddress &TcpStream::remote_addr() const noexcept { return remote_addr_; }
 
-void TcpStream::close() {
-    stream_.close();
-}
+int TcpStream::release_fd() noexcept { return stream_.release_fd(); }
 
-TcpStream::ReadAwaiter TcpStream::read(void *buf, size_t len) noexcept {
-    return stream_.read(buf, len);
-}
+void TcpStream::close() { stream_.close(); }
 
-TcpStream::WriteAwaiter TcpStream::write(const void *buf, size_t len) noexcept {
-    return stream_.write(buf, len);
-}
+TcpStream::ReadAwaiter TcpStream::read(void *buf, size_t len) noexcept { return stream_.read(buf, len); }
+
+TcpStream::WriteAwaiter TcpStream::write(const void *buf, size_t len) noexcept { return stream_.write(buf, len); }
 
 TcpStream::ReadvAwaiter TcpStream::readv(const struct iovec *iov, int iovcnt) noexcept {
     return stream_.readv(iov, iovcnt);

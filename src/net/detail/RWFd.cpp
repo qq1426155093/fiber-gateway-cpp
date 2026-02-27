@@ -2,12 +2,11 @@
 
 namespace fiber::net::detail {
 
-RWFd::RWFd(fiber::event::EventLoop &loop)
-    : efd_(loop, this, &RWFd::on_efd_events, fiber::event::Poller::Mode::OneShot) {
-}
+RWFd::RWFd(fiber::event::EventLoop &loop) :
+    efd_(loop, this, &RWFd::on_efd_events, fiber::event::Poller::Mode::OneShot) {}
 
-RWFd::RWFd(fiber::event::EventLoop &loop, int fd)
-    : efd_(loop, this, &RWFd::on_efd_events, fiber::event::Poller::Mode::OneShot) {
+RWFd::RWFd(fiber::event::EventLoop &loop, int fd) :
+    efd_(loop, this, &RWFd::on_efd_events, fiber::event::Poller::Mode::OneShot) {
     fiber::common::IoErr err = efd_.attach(fd);
     FIBER_ASSERT(err == fiber::common::IoErr::None);
 }
@@ -23,21 +22,13 @@ RWFd::~RWFd() {
     FIBER_ASSERT(false);
 }
 
-bool RWFd::valid() const noexcept {
-    return efd_.valid();
-}
+bool RWFd::valid() const noexcept { return efd_.valid(); }
 
-int RWFd::fd() const noexcept {
-    return efd_.fd();
-}
+int RWFd::fd() const noexcept { return efd_.fd(); }
 
-fiber::event::EventLoop &RWFd::loop() const noexcept {
-    return efd_.loop();
-}
+fiber::event::EventLoop &RWFd::loop() const noexcept { return efd_.loop(); }
 
-fiber::common::IoErr RWFd::attach(int fd) noexcept {
-    return efd_.attach(fd);
-}
+fiber::common::IoErr RWFd::attach(int fd) noexcept { return efd_.attach(fd); }
 
 int RWFd::release_fd() noexcept {
     FIBER_ASSERT(!has_waiters());
@@ -85,13 +76,9 @@ void RWFd::close() {
     efd_.close_fd();
 }
 
-RWFd::WaitReadableAwaiter RWFd::wait_readable() noexcept {
-    return WaitReadableAwaiter(*this);
-}
+RWFd::WaitReadableAwaiter RWFd::wait_readable() noexcept { return WaitReadableAwaiter(*this); }
 
-RWFd::WaitWritableAwaiter RWFd::wait_writable() noexcept {
-    return WaitWritableAwaiter(*this);
-}
+RWFd::WaitWritableAwaiter RWFd::wait_writable() noexcept { return WaitWritableAwaiter(*this); }
 
 void RWFd::on_efd_events(void *owner, fiber::event::IoEvent events) {
     auto *rwfd = static_cast<RWFd *>(owner);
@@ -140,9 +127,7 @@ void RWFd::handle_events(fiber::event::IoEvent events) {
     }
 }
 
-bool RWFd::has_waiters() const noexcept {
-    return local_read_waiter_ != nullptr || local_write_waiter_ != nullptr;
-}
+bool RWFd::has_waiters() const noexcept { return local_read_waiter_ != nullptr || local_write_waiter_ != nullptr; }
 
 void RWFdCrossThreadWaiter::on_notify_cancel(RWFdCrossThreadWaiter *waiter) {
     RWFdWaiterState state = waiter->state_.load(std::memory_order_relaxed);
@@ -181,9 +166,9 @@ void RWFdCrossThreadWaiter::cancel_wait() noexcept {
     }
 
     if (expected == RWFdWaiterState::Request_Cancel) {
-        rwfd_->loop().post<RWFdCrossThreadWaiter,
-                           &RWFdCrossThreadWaiter::cancel_entry_,
-                           &RWFdCrossThreadWaiter::on_notify_cancel>(*this);
+        rwfd_->loop()
+                .post<RWFdCrossThreadWaiter, &RWFdCrossThreadWaiter::cancel_entry_,
+                      &RWFdCrossThreadWaiter::on_notify_cancel>(*this);
     }
 }
 
@@ -202,17 +187,14 @@ void RWFdCrossThreadWaiter::do_notify_resume(RWFdCrossThreadWaiter *waiter) noex
             default:
                 FIBER_ASSERT(false);
         }
-        if (waiter->state_.compare_exchange_weak(state,
-                                                 expected,
-                                                 std::memory_order_acq_rel,
+        if (waiter->state_.compare_exchange_weak(state, expected, std::memory_order_acq_rel,
                                                  std::memory_order_acquire)) {
             break;
         }
     }
 
     if (expected == RWFdWaiterState::Notify_Resume) {
-        waiter->loop_->post<RWFdCrossThreadWaiter,
-                            &RWFdCrossThreadWaiter::cancel_entry_,
+        waiter->loop_->post<RWFdCrossThreadWaiter, &RWFdCrossThreadWaiter::cancel_entry_,
                             &RWFdCrossThreadWaiter::on_notify_resume>(*waiter);
     }
 }
