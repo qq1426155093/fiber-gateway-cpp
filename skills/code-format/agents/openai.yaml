@@ -1,0 +1,4 @@
+interface:
+  display_name: "Code Format"
+  short_description: "Format C/C++ code with clang-format"
+  default_prompt: "Use $code-format to format selected C/C++ files with the workspace .clang-format."
