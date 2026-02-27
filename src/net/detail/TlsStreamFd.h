@@ -63,6 +63,8 @@ public:
 
     [[nodiscard]] ReadAwaiter read(void *buf, size_t len) noexcept;
     [[nodiscard]] WriteAwaiter write(const void *buf, size_t len) noexcept;
+    [[nodiscard]] fiber::common::IoResult<size_t> try_read(void *buf, size_t len) noexcept;
+    [[nodiscard]] fiber::common::IoResult<size_t> try_write(const void *buf, size_t len) noexcept;
     [[nodiscard]] HandshakeAwaiter handshake() noexcept;
     [[nodiscard]] ShutdownAwaiter shutdown() noexcept;
 

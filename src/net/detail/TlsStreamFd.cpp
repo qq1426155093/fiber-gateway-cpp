@@ -128,6 +128,42 @@ TlsStreamFd::WriteAwaiter TlsStreamFd::write(const void *buf, size_t len) noexce
     return {*this, buf, len};
 }
 
+fiber::common::IoResult<size_t> TlsStreamFd::try_read(void *buf, size_t len) noexcept {
+    if (busy_) {
+        return std::unexpected(fiber::common::IoErr::Busy);
+    }
+    busy_ = true;
+    size_t out = 0;
+    fiber::event::IoEvent wait_event = fiber::event::IoEvent::None;
+    fiber::common::IoErr err = read_once(buf, len, out, wait_event);
+    busy_ = false;
+    if (err == fiber::common::IoErr::WouldBlock && wait_event == fiber::event::IoEvent::None) {
+        return std::unexpected(fiber::common::IoErr::Invalid);
+    }
+    if (err == fiber::common::IoErr::None) {
+        return out;
+    }
+    return std::unexpected(err);
+}
+
+fiber::common::IoResult<size_t> TlsStreamFd::try_write(const void *buf, size_t len) noexcept {
+    if (busy_) {
+        return std::unexpected(fiber::common::IoErr::Busy);
+    }
+    busy_ = true;
+    size_t out = 0;
+    fiber::event::IoEvent wait_event = fiber::event::IoEvent::None;
+    fiber::common::IoErr err = write_once(buf, len, out, wait_event);
+    busy_ = false;
+    if (err == fiber::common::IoErr::WouldBlock && wait_event == fiber::event::IoEvent::None) {
+        return std::unexpected(fiber::common::IoErr::Invalid);
+    }
+    if (err == fiber::common::IoErr::None) {
+        return out;
+    }
+    return std::unexpected(err);
+}
+
 TlsStreamFd::HandshakeAwaiter TlsStreamFd::handshake() noexcept {
     return HandshakeAwaiter(*this);
 }
