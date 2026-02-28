@@ -41,20 +41,26 @@ public:
     [[nodiscard]] bool is_multicast() const noexcept;
     [[nodiscard]] const std::array<std::uint8_t, 4> &v4_bytes() const {
         FIBER_ASSERT(is_v4());
-        return v4_;
+        return bytes_.v4;
     }
     [[nodiscard]] const std::array<std::uint8_t, 16> &v6_bytes() const {
         FIBER_ASSERT(is_v6());
-        return v6_;
+        return bytes_.v6;
     }
 
     static bool parse(std::string_view text, IpAddress &out);
     std::string to_string() const;
 
 private:
+    union AddressBytes {
+        std::array<std::uint8_t, 4> v4;
+        std::array<std::uint8_t, 16> v6;
+
+        constexpr AddressBytes() : v4{} {}
+    };
+
     IpFamily family_{IpFamily::V4};
-    std::array<std::uint8_t, 4> v4_{};
-    std::array<std::uint8_t, 16> v6_{};
+    AddressBytes bytes_{};
     std::uint32_t scope_id_{0};
 };
 

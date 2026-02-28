@@ -10,14 +10,14 @@ IpAddress::IpAddress() = default;
 IpAddress IpAddress::v4(std::array<std::uint8_t, 4> bytes) {
     IpAddress out;
     out.family_ = IpFamily::V4;
-    out.v4_ = bytes;
+    out.bytes_.v4 = bytes;
     return out;
 }
 
 IpAddress IpAddress::v6(std::array<std::uint8_t, 16> bytes, std::uint32_t scope_id) {
     IpAddress out;
     out.family_ = IpFamily::V6;
-    out.v6_ = bytes;
+    out.bytes_.v6 = bytes;
     out.scope_id_ = scope_id;
     return out;
 }
@@ -43,25 +43,25 @@ IpAddress IpAddress::loopback_v6() {
 
 bool IpAddress::is_loopback() const noexcept {
     if (is_v4()) {
-        return v4_[0] == 127;
+        return bytes_.v4[0] == 127;
     }
     if (is_v6()) {
-        for (std::size_t i = 0; i + 1 < v6_.size(); ++i) {
-            if (v6_[i] != 0) {
+        for (std::size_t i = 0; i + 1 < bytes_.v6.size(); ++i) {
+            if (bytes_.v6[i] != 0) {
                 return false;
             }
         }
-        return v6_[15] == 1;
+        return bytes_.v6[15] == 1;
     }
     return false;
 }
 
 bool IpAddress::is_unspecified() const noexcept {
     if (is_v4()) {
-        return v4_[0] == 0 && v4_[1] == 0 && v4_[2] == 0 && v4_[3] == 0;
+        return bytes_.v4[0] == 0 && bytes_.v4[1] == 0 && bytes_.v4[2] == 0 && bytes_.v4[3] == 0;
     }
     if (is_v6()) {
-        for (auto byte : v6_) {
+        for (auto byte : bytes_.v6) {
             if (byte != 0) {
                 return false;
             }
@@ -73,10 +73,10 @@ bool IpAddress::is_unspecified() const noexcept {
 
 bool IpAddress::is_multicast() const noexcept {
     if (is_v4()) {
-        return (v4_[0] & 0xF0) == 0xE0;
+        return (bytes_.v4[0] & 0xF0) == 0xE0;
     }
     if (is_v6()) {
-        return v6_[0] == 0xFF;
+        return bytes_.v6[0] == 0xFF;
     }
     return false;
 }
@@ -108,10 +108,10 @@ std::string IpAddress::to_string() const {
     const void *src = nullptr;
     int family = AF_INET;
     if (is_v4()) {
-        src = v4_.data();
+        src = bytes_.v4.data();
         family = AF_INET;
     } else {
-        src = v6_.data();
+        src = bytes_.v6.data();
         family = AF_INET6;
     }
     const char *result = ::inet_ntop(family, src, buffer, sizeof(buffer));
