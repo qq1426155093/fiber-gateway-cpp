@@ -116,14 +116,15 @@ DetachedTask accept_loop(fiber::event::EventLoop *loop, std::uint16_t port) {
             }
             continue;
         }
-        if (accept_result->fd < 0) {
+        if (!accept_result->valid()) {
             std::cerr << "accept returned invalid fd\n";
             continue;
         }
-        std::cerr << "client connected: " << accept_result->peer.to_string() << '\n';
+        auto accept = std::move(*accept_result);
+        std::cerr << "client connected: " << accept.peer().to_string() << '\n';
         auto stream = std::make_unique<fiber::net::TcpStream>(*loop,
-                                                              accept_result->fd,
-                                                              accept_result->peer);
+                                                              accept.release_fd(),
+                                                              accept.take_peer());
         fiber::async::spawn(*loop, [stream = std::move(stream)]() mutable {
             return echo_session(std::move(stream));
         });

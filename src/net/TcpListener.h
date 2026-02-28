@@ -3,6 +3,8 @@
 
 #include <cstdint>
 #include <sys/socket.h>
+#include <unistd.h>
+#include <utility>
 
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
@@ -21,8 +23,52 @@ struct ListenOptions {
 };
 
 struct AcceptResult {
-    int fd = -1;
-    SocketAddress peer{};
+    AcceptResult() = default;
+    AcceptResult(int fd, SocketAddress peer) : fd_(fd), peer_(std::move(peer)) {}
+    AcceptResult(const AcceptResult &) = delete;
+    AcceptResult &operator=(const AcceptResult &) = delete;
+
+    AcceptResult(AcceptResult &&other) noexcept : fd_(other.fd_), peer_(std::move(other.peer_)) {
+        other.fd_ = -1;
+    }
+
+    AcceptResult &operator=(AcceptResult &&other) noexcept {
+        if (this == &other) {
+            return *this;
+        }
+        close_fd();
+        fd_ = other.fd_;
+        peer_ = std::move(other.peer_);
+        other.fd_ = -1;
+        return *this;
+    }
+
+    ~AcceptResult() {
+        close_fd();
+    }
+
+    [[nodiscard]] bool valid() const noexcept { return fd_ >= 0; }
+    [[nodiscard]] int fd() const noexcept { return fd_; }
+    int release_fd() noexcept {
+        int fd = fd_;
+        fd_ = -1;
+        return fd;
+    }
+    [[nodiscard]] const SocketAddress &peer() const noexcept { return peer_; }
+    SocketAddress take_peer() { return std::move(peer_); }
+
+private:
+    void close_fd() noexcept {
+        if (fd_ < 0) {
+            return;
+        }
+        int fd = fd_;
+        fd_ = -1;
+        ::close(fd);
+    }
+
+    int fd_ = -1;
+    SocketAddress peer_{};
 };
 
 struct TcpTraits {

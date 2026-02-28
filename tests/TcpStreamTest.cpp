@@ -166,7 +166,7 @@ DetachedTask read_write_server(fiber::event::EventLoop *loop,
         fail(accept_result.error(), none, fd);
         co_return;
     }
-    int accepted_fd = accept_result->fd;
+    int accepted_fd = accept_result->release_fd();
     if (accepted_fd < 0) {
         std::unique_ptr<fiber::net::TcpStream> none;
         fail(fiber::common::IoErr::BadFd, none, accepted_fd);
@@ -283,7 +283,7 @@ DetachedTask readv_writev_server(fiber::event::EventLoop *loop,
         fail(accept_result.error(), none, fd);
         co_return;
     }
-    int accepted_fd = accept_result->fd;
+    int accepted_fd = accept_result->release_fd();
     if (accepted_fd < 0) {
         std::unique_ptr<fiber::net::TcpStream> none;
         fail(fiber::common::IoErr::BadFd, none, accepted_fd);

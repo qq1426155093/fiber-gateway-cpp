@@ -91,7 +91,6 @@ fiber::common::IoResult<int> TcpTraits::bind(const SocketAddress &addr,
 
 fiber::common::IoErr TcpTraits::accept_once(int fd, AcceptResult &out) {
     out = {};
-    out.fd = -1;
     if (fd < 0) {
         return fiber::common::IoErr::BadFd;
     }
@@ -100,14 +99,12 @@ fiber::common::IoErr TcpTraits::accept_once(int fd, AcceptResult &out) {
         socklen_t len = sizeof(addr);
         int client = ::accept4(fd, reinterpret_cast<sockaddr *>(&addr), &len, SOCK_NONBLOCK | SOCK_CLOEXEC);
         if (client >= 0) {
-            out.fd = client;
             SocketAddress peer;
             if (!SocketAddress::from_sockaddr(reinterpret_cast<const sockaddr *>(&addr), len, peer)) {
                 ::close(client);
-                out.fd = -1;
                 return fiber::common::IoErr::NotSupported;
             }
-            out.peer = peer;
+            out = AcceptResult(client, std::move(peer));
             return fiber::common::IoErr::None;
         }
         int err = errno;

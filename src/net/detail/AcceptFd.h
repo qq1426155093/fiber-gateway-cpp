@@ -4,6 +4,7 @@
 #include <cerrno>
 #include <coroutine>
 #include <unistd.h>
+#include <utility>
 
 #include "../../common/Assert.h"
 #include "../../common/IoError.h"
@@ -98,7 +99,7 @@ private:
         AcceptResult out;
         fiber::common::IoErr err = Traits::accept_once(efd_.fd(), out);
         if (err == fiber::common::IoErr::None) {
-            awaiter->result_ = out;
+            awaiter->result_ = std::move(out);
             return false;
         }
         if (err != fiber::common::IoErr::WouldBlock) {
@@ -146,7 +147,7 @@ private:
         waiter->waiting_ = false;
         unwatch_read();
         if (err == fiber::common::IoErr::None) {
-            waiter->result_ = out;
+            waiter->result_ = std::move(out);
         } else {
             waiter->result_ = std::unexpected(err);
         }
@@ -192,7 +193,7 @@ public:
         return acceptor_->begin_wait(this);
     }
 
-    fiber::common::IoResult<AcceptResult> await_resume() noexcept { return result_; }
+    fiber::common::IoResult<AcceptResult> await_resume() noexcept { return std::move(result_); }
 
 private:
     friend class AcceptFd;

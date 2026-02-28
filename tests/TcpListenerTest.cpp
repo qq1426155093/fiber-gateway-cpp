@@ -54,10 +54,7 @@ DetachedTask accept_once(fiber::event::EventLoop *loop,
     port_promise->set_value(local.port());
 
     auto result = co_await listener->accept();
-    accept_promise->set_value(result);
-    if (result && result->fd >= 0) {
-        ::close(result->fd);
-    }
+    accept_promise->set_value(std::move(result));
     listener->close();
     delete listener;
     *out_listener = nullptr;
@@ -70,9 +67,6 @@ DetachedTask expect_busy(fiber::net::TcpListener *listener,
     auto result = co_await listener->accept();
     if (result) {
         error_promise->set_value(fiber::common::IoErr::None);
-        if (result->fd >= 0) {
-            ::close(result->fd);
-        }
     } else {
         error_promise->set_value(result.error());
     }
@@ -115,7 +109,7 @@ TEST(TcpListenerTest, AcceptsConnection) {
     }
     auto result = accept_future.get();
     ASSERT_TRUE(result);
-    EXPECT_GE(result->fd, 0);
+    EXPECT_GE(result->fd(), 0);
     group.join();
 }
 
@@ -168,6 +162,6 @@ TEST(TcpListenerTest, OwnerMismatchReturnsBusy) {
     }
     auto result = accept_future.get();
     ASSERT_TRUE(result);
-    EXPECT_GE(result->fd, 0);
+    EXPECT_GE(result->fd(), 0);
     group.join();
 }

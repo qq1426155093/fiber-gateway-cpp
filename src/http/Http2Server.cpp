@@ -52,20 +52,14 @@ fiber::async::DetachedTask Http2Server::serve() {
             }
             continue;
         }
-        auto accept = *accept_result;
+        auto accept = std::move(*accept_result);
         fiber::async::spawn(loop_, [this, accept = std::move(accept)]() mutable -> fiber::async::DetachedTask {
-            std::unique_ptr<net::TcpStream> stream =
-                    std::make_unique<net::TcpStream>(loop_, accept.fd, std::move(accept.peer));
             std::unique_ptr<HttpTransport> transport;
             if (options_.tls.enabled) {
+                auto tls_stream = std::make_unique<net::TlsTcpStream>(loop_, accept.release_fd(), accept.take_peer());
                 if (!tls_ctx_) {
                     co_return;
                 }
-                int fd = stream->release_fd();
-                if (fd < 0) {
-                    co_return;
-                }
-                auto tls_stream = std::make_unique<net::TlsTcpStream>(stream->loop(), fd, stream->remote_addr());
                 auto tls_result = TlsTransport::create(std::move(tls_stream), *tls_ctx_);
                 if (!tls_result) {
                     co_return;
@@ -77,6 +71,8 @@ fiber::async::DetachedTask Http2Server::serve() {
                     co_return;
                 }
             } else {
+                std::unique_ptr<net::TcpStream> stream =
+                        std::make_unique<net::TcpStream>(loop_, accept.release_fd(), accept.take_peer());
                 transport = std::make_unique<TcpTransport>(std::move(stream));
             }
 
