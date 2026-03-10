@@ -1,0 +1,9 @@
+#ifndef FIBER_NGHTTP2_CONFIG_H
+#define FIBER_NGHTTP2_CONFIG_H
+
+#cmakedefine HAVE_ARPA_INET_H 1
+#cmakedefine HAVE_CLOCK_GETTIME 1
+#cmakedefine HAVE_DECL_CLOCK_MONOTONIC 1
+#cmakedefine HAVE_NETINET_IN_H 1
+
+#endif

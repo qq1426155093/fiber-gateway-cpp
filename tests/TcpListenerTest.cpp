@@ -63,7 +63,9 @@ DetachedTask accept_once(fiber::event::EventLoop *loop,
 }
 
 DetachedTask expect_busy(fiber::net::TcpListener *listener,
+                         std::promise<void> *started_promise,
                          std::promise<fiber::common::IoErr> *error_promise) {
+    started_promise->set_value();
     auto result = co_await listener->accept();
     if (result) {
         error_promise->set_value(fiber::common::IoErr::None);
@@ -119,9 +121,11 @@ TEST(TcpListenerTest, OwnerMismatchReturnsBusy) {
 
     std::promise<uint16_t> port_promise;
     std::promise<fiber::common::IoResult<fiber::net::AcceptResult>> accept_promise;
+    std::promise<void> busy_started_promise;
     std::promise<fiber::common::IoErr> busy_promise;
     auto port_future = port_promise.get_future();
     auto accept_future = accept_promise.get_future();
+    auto busy_started_future = busy_started_promise.get_future();
     auto busy_future = busy_promise.get_future();
     fiber::net::TcpListener *listener = nullptr;
 
@@ -134,8 +138,15 @@ TEST(TcpListenerTest, OwnerMismatchReturnsBusy) {
     ASSERT_NE(listener, nullptr);
 
     fiber::async::spawn(group.at(0), [&]() {
-        return expect_busy(listener, &busy_promise);
+        return expect_busy(listener, &busy_started_promise, &busy_promise);
     });
+
+    if (busy_started_future.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+        group.stop();
+        group.join();
+        FAIL() << "busy accept did not start in time";
+        return;
+    }
 
     int client = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     ASSERT_GE(client, 0);

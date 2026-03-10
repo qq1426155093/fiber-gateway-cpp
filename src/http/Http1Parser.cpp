@@ -1,4 +1,5 @@
 #include "Http1Parser.h"
+#include <cstring>
 #include <string_view>
 #include "HttpExchange.h"
 
