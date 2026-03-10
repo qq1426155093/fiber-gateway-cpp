@@ -10,9 +10,9 @@
 #include "../common/IoError.h"
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
+#include "../common/mem/IoBuf.h"
 #include "../net/TcpStream.h"
 #include "../net/TlsTcpStream.h"
-#include "HeadBuf.h"
 #include "TlsContext.h"
 
 namespace fiber::http {
@@ -25,14 +25,15 @@ public:
     virtual fiber::async::Task<common::IoResult<void>> shutdown(std::chrono::milliseconds timeout) = 0;
     virtual fiber::async::Task<common::IoResult<size_t>> read(void *buf, size_t len,
                                                               std::chrono::milliseconds timeout) = 0;
-    virtual fiber::async::Task<common::IoResult<size_t>> read_into(BufChain *buf,
+    virtual fiber::async::Task<common::IoResult<size_t>> read_into(mem::IoBuf &buf,
                                                                    std::chrono::milliseconds timeout) = 0;
-    virtual fiber::async::Task<common::IoResult<size_t>> readv_into(BufChain *bufs,
+    virtual fiber::async::Task<common::IoResult<size_t>> readv_into(mem::IoBufChain &bufs,
                                                                     std::chrono::milliseconds timeout) = 0;
     virtual fiber::async::Task<common::IoResult<size_t>> write(const void *buf, size_t len,
                                                                std::chrono::milliseconds timeout) = 0;
-    virtual fiber::async::Task<common::IoResult<size_t>> write(BufChain *buf, std::chrono::milliseconds timeout) = 0;
-    virtual fiber::async::Task<common::IoResult<size_t>> writev(BufChain *buf, std::chrono::milliseconds timeout) = 0;
+    virtual fiber::async::Task<common::IoResult<size_t>> write(mem::IoBuf &buf, std::chrono::milliseconds timeout) = 0;
+    virtual fiber::async::Task<common::IoResult<size_t>> writev(mem::IoBufChain &buf,
+                                                                std::chrono::milliseconds timeout) = 0;
     virtual void close() = 0;
     [[nodiscard]] virtual bool valid() const noexcept = 0;
     [[nodiscard]] virtual int fd() const noexcept = 0;
@@ -48,12 +49,14 @@ public:
     fiber::async::Task<common::IoResult<void>> shutdown(std::chrono::milliseconds timeout) override;
     fiber::async::Task<common::IoResult<size_t>> read(void *buf, size_t len,
                                                       std::chrono::milliseconds timeout) override;
-    fiber::async::Task<common::IoResult<size_t>> read_into(BufChain *buf, std::chrono::milliseconds timeout) override;
-    fiber::async::Task<common::IoResult<size_t>> readv_into(BufChain *bufs, std::chrono::milliseconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> read_into(mem::IoBuf &buf, std::chrono::milliseconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> readv_into(mem::IoBufChain &bufs,
+                                                            std::chrono::milliseconds timeout) override;
     fiber::async::Task<common::IoResult<size_t>> write(const void *buf, size_t len,
                                                        std::chrono::milliseconds timeout) override;
-    fiber::async::Task<common::IoResult<size_t>> write(BufChain *buf, std::chrono::milliseconds timeout) override;
-    fiber::async::Task<common::IoResult<size_t>> writev(BufChain *buf, std::chrono::milliseconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> write(mem::IoBuf &buf, std::chrono::milliseconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> writev(mem::IoBufChain &buf,
+                                                        std::chrono::milliseconds timeout) override;
     void close() override;
     [[nodiscard]] bool valid() const noexcept override;
     [[nodiscard]] int fd() const noexcept override;
@@ -74,12 +77,14 @@ public:
     fiber::async::Task<common::IoResult<void>> shutdown(std::chrono::milliseconds timeout) override;
     fiber::async::Task<common::IoResult<size_t>> read(void *buf, size_t len,
                                                       std::chrono::milliseconds timeout) override;
-    fiber::async::Task<common::IoResult<size_t>> read_into(BufChain *buf, std::chrono::milliseconds timeout) override;
-    fiber::async::Task<common::IoResult<size_t>> readv_into(BufChain *bufs, std::chrono::milliseconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> read_into(mem::IoBuf &buf, std::chrono::milliseconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> readv_into(mem::IoBufChain &bufs,
+                                                            std::chrono::milliseconds timeout) override;
     fiber::async::Task<common::IoResult<size_t>> write(const void *buf, size_t len,
                                                        std::chrono::milliseconds timeout) override;
-    fiber::async::Task<common::IoResult<size_t>> write(BufChain *buf, std::chrono::milliseconds timeout) override;
-    fiber::async::Task<common::IoResult<size_t>> writev(BufChain *buf, std::chrono::milliseconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> write(mem::IoBuf &buf, std::chrono::milliseconds timeout) override;
+    fiber::async::Task<common::IoResult<size_t>> writev(mem::IoBufChain &buf,
+                                                        std::chrono::milliseconds timeout) override;
     void close() override;
     [[nodiscard]] bool valid() const noexcept override;
     [[nodiscard]] int fd() const noexcept override;

@@ -470,6 +470,42 @@ IoBuf *IoBufChain::front() noexcept { return head_ ? &head_->buf : nullptr; }
 
 const IoBuf *IoBufChain::front() const noexcept { return head_ ? &head_->buf : nullptr; }
 
+IoBuf *IoBufChain::first_readable() noexcept {
+    for (Node *node = head_; node; node = node->next) {
+        if (node->buf.readable() > 0) {
+            return &node->buf;
+        }
+    }
+    return nullptr;
+}
+
+const IoBuf *IoBufChain::first_readable() const noexcept {
+    for (Node *node = head_; node; node = node->next) {
+        if (node->buf.readable() > 0) {
+            return &node->buf;
+        }
+    }
+    return nullptr;
+}
+
+IoBuf *IoBufChain::first_writable() noexcept {
+    for (Node *node = head_; node; node = node->next) {
+        if (node->buf.writable() > 0) {
+            return &node->buf;
+        }
+    }
+    return nullptr;
+}
+
+const IoBuf *IoBufChain::first_writable() const noexcept {
+    for (Node *node = head_; node; node = node->next) {
+        if (node->buf.writable() > 0) {
+            return &node->buf;
+        }
+    }
+    return nullptr;
+}
+
 void IoBufChain::delete_nodes(Node *node) noexcept {
     while (node) {
         Node *next = node->next;

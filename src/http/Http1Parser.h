@@ -9,7 +9,7 @@
 
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
-#include "HeadBuf.h"
+#include "../common/mem/IoBuf.h"
 #include "HttpCommon.h"
 
 namespace fiber::http {
@@ -61,10 +61,10 @@ public:
 
     void reset();
 
-    ParseCode execute(fiber::http::BufChain *buffer);
+    ParseCode execute(fiber::mem::IoBuf *buffer);
     // replace the pointers in RequestLineState.
     // the content was copied to the new_buf_start pointer because the limit of the old memory capacity.
-    ParseCode replace_buf_ptr(BufChain *old_chain, BufChain *new_chain) noexcept;
+    ParseCode replace_buf_ptr(mem::IoBuf *old_chain, mem::IoBuf *new_chain) noexcept;
     const RequestLineState &state() const noexcept { return line_; }
 
     enum class State {
@@ -122,10 +122,10 @@ public:
 
     void reset();
 
-    ParseCode execute(BufChain *buffer);
+    ParseCode execute(mem::IoBuf *buffer);
     // replace the pointers in HeaderLineState.
     // the content was copied to the new_buf_start pointer because the limit of the old memory capacity.
-    ParseCode replace_buf_ptr(BufChain *old_chain, BufChain *new_chain) noexcept;
+    ParseCode replace_buf_ptr(mem::IoBuf *old_chain, mem::IoBuf *new_chain) noexcept;
     const HeaderLineState &state() const noexcept { return line_; }
 
     enum class State {

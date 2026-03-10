@@ -7,8 +7,6 @@
 #include "../common/IoError.h"
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
-#include "../common/mem/BufPool.h"
-#include "HeadBuf.h"
 #include "Http1Parser.h"
 #include "HttpExchange.h"
 #include "HttpHeaders.h"
@@ -23,9 +21,7 @@ class Http1Context : public common::NonCopyable, public common::NonMovable {
 public:
     Http1Context(HttpTransport &transport, const HttpServerOptions &options);
 
-    fiber::async::Task<fiber::common::IoResult<ParseCode>> parse_request(HttpExchange &exchange, BufChain *chain);
-
-    mem::BufPool &header_pool() noexcept { return header_pool_; }
+    fiber::async::Task<fiber::common::IoResult<ParseCode>> parse_request(HttpExchange &exchange);
     [[nodiscard]] const HttpServerOptions &options() const noexcept { return options_; }
 
 private:
@@ -36,8 +32,6 @@ private:
     static bool handle_transfer_encoding(HttpExchange &exchange, const HttpHeaders::HeaderField &header);
     static bool handle_connection(HttpExchange &exchange, const HttpHeaders::HeaderField &header);
 
-    HeaderBuffers header_bufs_;
-    mem::BufPool header_pool_;
     HttpTransport *transport_ = nullptr;
     HttpServerOptions options_;
 };

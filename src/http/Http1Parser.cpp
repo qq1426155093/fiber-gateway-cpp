@@ -170,19 +170,19 @@ void RequestLineParser::reset() {
 }
 
 
-ParseCode RequestLineParser::replace_buf_ptr(BufChain *old_chain, BufChain *new_chain) noexcept {
+ParseCode RequestLineParser::replace_buf_ptr(mem::IoBuf *old_chain, mem::IoBuf *new_chain) noexcept {
     FIBER_ASSERT(state_ != State::Start);
-    FIBER_ASSERT(old_chain->pos > line_.request_start && old_chain->start <= line_.request_start);
-    std::uint8_t *new_buf_start = new_chain->pos;
+    FIBER_ASSERT(old_chain->readable_data() > line_.request_start && old_chain->data() <= line_.request_start);
+    std::uint8_t *new_buf_start = new_chain->writable_data();
     std::uint8_t *old = line_.request_start;
-    auto length = old_chain->pos - old;
+    auto length = static_cast<std::size_t>(old_chain->readable_data() - old);
     if (new_chain->writable() < length) {
         return ParseCode::HeaderTooLarge;
     }
     FIBER_ASSERT(length > 0);
     ::memcpy(new_buf_start, old, length);
-    new_chain->pos += length;
-    new_chain->last = new_chain->pos;
+    new_chain->commit(length);
+    new_chain->consume(length);
     auto delta = new_buf_start - old;
     auto shift = [=](std::uint8_t *&ptr) {
         if (ptr) {
@@ -204,15 +204,17 @@ ParseCode RequestLineParser::replace_buf_ptr(BufChain *old_chain, BufChain *new_
     return ParseCode::Ok;
 }
 
-ParseCode RequestLineParser::execute(fiber::http::BufChain *buffer) {
-    if (buffer->readable() == 0) {
+ParseCode RequestLineParser::execute(mem::IoBuf *buffer) {
+    if (!buffer || buffer->readable() == 0) {
         return ParseCode::Again;
     }
 
-    auto *p = buffer->pos;
+    auto *begin = buffer->readable_data();
+    auto *p = begin;
+    auto *end = buffer->writable_data();
     State state = state_;
 
-    for (; p < buffer->last; ++p) {
+    for (; p < end; ++p) {
         unsigned char ch = *p;
         unsigned char c;
         switch (state) {
@@ -674,18 +676,22 @@ ParseCode RequestLineParser::execute(fiber::http::BufChain *buffer) {
         }
     }
 
-    buffer->pos = p;
+    buffer->consume(static_cast<std::size_t>(p - begin));
     state_ = state;
     return ParseCode::Again;
 
 done:
-    buffer->pos = p + 1;
     if (!line_.request_end) {
-        if (p > buffer->start && *(p - 1) == '\r') {
-            line_.request_end = (p > buffer->start + 1) ? (p - 2) : buffer->start;
+        std::uint8_t *buffer_start = buffer->data();
+        if (p > buffer_start && *(p - 1) == '\r') {
+            line_.request_end = (p > buffer_start + 1) ? (p - 2) : buffer_start;
         } else {
-            line_.request_end = (p > buffer->start) ? (p - 1) : buffer->start;
+            line_.request_end = (p > buffer_start) ? (p - 1) : buffer_start;
         }
+    }
+    buffer->consume(static_cast<std::size_t>((p + 1) - begin));
+    if (!line_.request_end) {
+        line_.request_end = buffer->data();
     }
     line_.http_version = line_.http_major * 1000 + line_.http_minor;
     state_ = State::Start;
@@ -707,19 +713,19 @@ void HeaderLineParser::reset() {
     line_ = HeaderLineState{};
 }
 
-ParseCode HeaderLineParser::replace_buf_ptr(BufChain *old_chain, BufChain *new_chain) noexcept {
+ParseCode HeaderLineParser::replace_buf_ptr(mem::IoBuf *old_chain, mem::IoBuf *new_chain) noexcept {
     FIBER_ASSERT(state_ != State::Start);
-    FIBER_ASSERT(old_chain->pos > line_.header_name_start && old_chain->start <= line_.header_name_start);
-    std::uint8_t *new_buf_start = new_chain->pos;
+    FIBER_ASSERT(old_chain->readable_data() > line_.header_name_start && old_chain->data() <= line_.header_name_start);
+    std::uint8_t *new_buf_start = new_chain->writable_data();
     std::uint8_t *old = line_.header_name_start;
-    auto length = old_chain->pos - old;
+    auto length = static_cast<std::size_t>(old_chain->readable_data() - old);
     if (new_chain->writable() < length) {
         return ParseCode::HeaderTooLarge;
     }
     FIBER_ASSERT(length > 0);
     ::memcpy(new_buf_start, old, length);
-    new_chain->pos += length;
-    new_chain->last = new_chain->pos;
+    new_chain->commit(length);
+    new_chain->consume(length);
     auto delta = new_buf_start - old;
     auto shift = [=](std::uint8_t *&ptr) {
         if (ptr) {
@@ -734,17 +740,19 @@ ParseCode HeaderLineParser::replace_buf_ptr(BufChain *old_chain, BufChain *new_c
 }
 
 
-ParseCode HeaderLineParser::execute(BufChain *buffer) {
-    if (buffer->readable() == 0) {
+ParseCode HeaderLineParser::execute(mem::IoBuf *buffer) {
+    if (!buffer || buffer->readable() == 0) {
         return ParseCode::Again;
     }
 
     for (;;) {
-        auto *p = buffer->pos;
+        auto *begin = buffer->readable_data();
+        auto *p = begin;
+        auto *end = buffer->writable_data();
         State state = state_;
         uint32_t hash = line_.header_hash;
         uint32_t i = line_.lowcase_index;
-        for (; p < buffer->last; ++p) {
+        for (; p < end; ++p) {
             unsigned char ch = *p;
             unsigned char c;
             switch (state) {
@@ -911,21 +919,21 @@ ParseCode HeaderLineParser::execute(BufChain *buffer) {
             }
         }
 
-        buffer->pos = p;
+        buffer->consume(static_cast<std::size_t>(p - begin));
         state_ = state;
         line_.header_hash = hash;
         line_.lowcase_index = i;
         return ParseCode::Again;
 
     done:
-        buffer->pos = p + 1;
+        buffer->consume(static_cast<std::size_t>((p + 1) - begin));
         state_ = State::Start;
         line_.header_hash = hash;
         line_.lowcase_index = i;
         return ParseCode::Ok;
 
     header_done:
-        buffer->pos = p + 1;
+        buffer->consume(static_cast<std::size_t>((p + 1) - begin));
         state_ = State::Start;
         return ParseCode::HeaderDone;
     }

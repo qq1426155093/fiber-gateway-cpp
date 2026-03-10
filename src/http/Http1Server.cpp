@@ -62,7 +62,7 @@ fiber::async::DetachedTask Http1Server::serve() {
 
             Http1Context context(*transport, options_);
             HttpExchange exchange(options_);
-            auto parse_result = co_await context.parse_request(exchange, nullptr);
+            auto parse_result = co_await context.parse_request(exchange);
             if (!parse_result || *parse_result != ParseCode::Ok) {
                 transport->close();
                 co_return;

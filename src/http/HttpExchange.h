@@ -15,6 +15,7 @@
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
 #include "../common/mem/BufPool.h"
+#include "../common/mem/IoBuf.h"
 #include "HttpCommon.h"
 #include "HttpHeaders.h"
 #include "TlsOptions.h"
@@ -86,6 +87,7 @@ private:
     friend class Http2ExchangeIo;
 
     fiber::mem::BufPool pool_;
+    fiber::mem::IoBufChain header_bufs_;
     HttpMethod method_{};
     HttpVersion version_{};
     HttpUri uri_;

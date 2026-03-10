@@ -131,7 +131,7 @@ fiber::async::Task<void> HttpServer::serve_http1(std::unique_ptr<HttpTransport> 
     }
     Http1Context context(*transport, options_);
     HttpExchange exchange(options_);
-    auto parse_result = co_await context.parse_request(exchange, nullptr);
+    auto parse_result = co_await context.parse_request(exchange);
     if (!parse_result || *parse_result != ParseCode::Ok) {
         transport->close();
         co_return;

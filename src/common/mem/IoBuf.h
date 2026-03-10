@@ -104,6 +104,10 @@ public:
 
     [[nodiscard]] IoBuf *front() noexcept;
     [[nodiscard]] const IoBuf *front() const noexcept;
+    [[nodiscard]] IoBuf *first_readable() noexcept;
+    [[nodiscard]] const IoBuf *first_readable() const noexcept;
+    [[nodiscard]] IoBuf *first_writable() noexcept;
+    [[nodiscard]] const IoBuf *first_writable() const noexcept;
 
 private:
     struct Node {

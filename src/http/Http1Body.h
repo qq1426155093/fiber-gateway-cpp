@@ -4,7 +4,8 @@
 
 #ifndef FIBER_HTTP1BODY_H
 #define FIBER_HTTP1BODY_H
-#include "HeadBuf.h"
+
+#include "../common/mem/IoBuf.h"
 
 namespace fiber::http {
 
@@ -23,7 +24,7 @@ public:
     [[nodiscard]] off_t size() const noexcept { return size_; }
     [[nodiscard]] off_t length() const noexcept { return length_; }
     void consume(off_t n) noexcept;
-    ParseCode execute(BufChain *chain) noexcept;
+    ParseCode execute(mem::IoBuf *chain) noexcept;
 
 private:
     enum class State {

@@ -128,14 +128,59 @@ const HeaderMap<Http1Context::HeaderHandler> &Http1Context::header_handler_map()
     return handlers;
 }
 
-Http1Context::Http1Context(HttpTransport &transport, const HttpServerOptions &options) :
-    header_bufs_(HeaderBuffers::Opt{options.header_init_size, options.header_large_size, options.header_large_num}),
-    header_pool_(options.header_init_size), transport_(&transport), options_(options) {}
+namespace {
 
-fiber::async::Task<fiber::common::IoResult<ParseCode>> Http1Context::parse_request(HttpExchange &exchange,
-                                                                                   BufChain *chain) {
+std::size_t next_header_capacity(const HttpServerOptions &options, std::size_t current_capacity,
+                                 std::size_t growth_count) noexcept {
+    if (current_capacity == 0) {
+        return options.header_init_size;
+    }
+    if (growth_count >= options.header_large_num) {
+        return 0;
+    }
+    if (options.header_large_size > std::numeric_limits<std::size_t>::max() - current_capacity) {
+        return 0;
+    }
+    return current_capacity + options.header_large_size;
+}
+
+common::IoResult<void> grow_header_buffer(mem::IoBuf &buffer, std::size_t &growth_count,
+                                          const HttpServerOptions &options, RequestLineParser *request_parser,
+                                          HeaderLineParser *header_parser) {
+    std::size_t next_capacity = next_header_capacity(options, buffer.capacity(), growth_count);
+    if (next_capacity == 0) {
+        return std::unexpected(common::IoErr::NoMem);
+    }
+
+    mem::IoBuf next = mem::IoBuf::allocate(next_capacity);
+    if (!next) {
+        return std::unexpected(common::IoErr::NoMem);
+    }
+
+    ParseCode code = ParseCode::Ok;
+    if (request_parser) {
+        code = request_parser->replace_buf_ptr(&buffer, &next);
+    } else if (header_parser) {
+        code = header_parser->replace_buf_ptr(&buffer, &next);
+    }
+    if (code != ParseCode::Ok) {
+        return std::unexpected(code == ParseCode::HeaderTooLarge ? common::IoErr::Invalid : common::IoErr::NoMem);
+    }
+
+    buffer = std::move(next);
+    ++growth_count;
+    return {};
+}
+
+} // namespace
+
+Http1Context::Http1Context(HttpTransport &transport, const HttpServerOptions &options) :
+    transport_(&transport), options_(options) {}
+
+fiber::async::Task<fiber::common::IoResult<ParseCode>> Http1Context::parse_request(HttpExchange &exchange) {
     exchange.request_headers_.clear();
     exchange.response_headers_.clear();
+    exchange.header_bufs_.clear();
     exchange.method_ = HttpMethod::Unknown;
     exchange.version_ = HttpVersion::HTTP_1_1;
     exchange.uri_ = HttpUri{};
@@ -152,41 +197,34 @@ fiber::async::Task<fiber::common::IoResult<ParseCode>> Http1Context::parse_reque
     exchange.response_content_length_set_ = false;
     exchange.response_content_length_ = 0;
 
-    if (!chain) {
-        chain = header_bufs_.alloc(header_pool_);
-        if (!chain) {
-            co_return std::unexpected(fiber::common::IoErr::NoMem);
-        }
+    std::size_t growth_count = 0;
+    mem::IoBuf parse_buf = mem::IoBuf::allocate(options_.header_init_size);
+    if (!parse_buf) {
+        co_return std::unexpected(fiber::common::IoErr::NoMem);
     }
-    std::size_t header_len = 0;
+
     {
         RequestLineParser req_parser(options_);
-        {
-        parse_request:
-            if (chain->writable() == 0) {
-                BufChain *next = header_bufs_.alloc(header_pool_);
-                if (!next) {
-                    if (header_bufs_.exhausted()) {
-                        co_return ParseCode::HeaderTooLarge;
+        for (;;) {
+            ParseCode code = req_parser.execute(&parse_buf);
+            if (code == ParseCode::Again) {
+                if (parse_buf.writable() == 0) {
+                    auto grow_result = grow_header_buffer(parse_buf, growth_count, options_, &req_parser, nullptr);
+                    if (!grow_result) {
+                        if (next_header_capacity(options_, parse_buf.capacity(), growth_count) == 0) {
+                            co_return ParseCode::HeaderTooLarge;
+                        }
+                        co_return std::unexpected(grow_result.error());
                     }
-                    co_return std::unexpected(fiber::common::IoErr::NoMem);
                 }
-                ParseCode code = req_parser.replace_buf_ptr(chain, next);
-                if (code != ParseCode::Ok) {
-                    co_return code;
-                }
-                chain = next;
-            }
-            if (chain->readable() == 0) {
-                auto p = co_await transport_->read_into(chain, options_.keep_alive_timeout);
+                auto p = co_await transport_->read_into(parse_buf, options_.keep_alive_timeout);
                 if (!p) {
                     co_return std::unexpected(p.error());
                 }
-                header_len += *p;
-            }
-            ParseCode code = req_parser.execute(chain);
-            if (code == ParseCode::Again) {
-                goto parse_request;
+                if (*p == 0) {
+                    co_return std::unexpected(fiber::common::IoErr::ConnReset);
+                }
+                continue;
             }
             if (code != ParseCode::Ok) {
                 co_return code;
@@ -225,78 +263,91 @@ fiber::async::Task<fiber::common::IoResult<ParseCode>> Http1Context::parse_reque
                     exchange.uri_.exten = std::string_view(reinterpret_cast<char *>(line.uri_ext), ext_len);
                 }
             }
+            break;
         }
     }
     {
         HeaderLineParser hdr_parser(options_);
-    parse_line:
-        if (chain->writable() == 0) {
-            BufChain *next = header_bufs_.alloc(header_pool_);
-            if (!next) {
-                if (header_bufs_.exhausted()) {
-                    co_return ParseCode::HeaderTooLarge;
+        for (;;) {
+            ParseCode code = hdr_parser.execute(&parse_buf);
+            if (code == ParseCode::Again) {
+                if (parse_buf.writable() == 0) {
+                    auto grow_result = grow_header_buffer(parse_buf, growth_count, options_, nullptr, &hdr_parser);
+                    if (!grow_result) {
+                        if (next_header_capacity(options_, parse_buf.capacity(), growth_count) == 0) {
+                            co_return ParseCode::HeaderTooLarge;
+                        }
+                        co_return std::unexpected(grow_result.error());
+                    }
                 }
-                co_return std::unexpected(fiber::common::IoErr::NoMem);
+                auto p = co_await transport_->read_into(parse_buf, options_.keep_alive_timeout);
+                if (!p) {
+                    co_return std::unexpected(p.error());
+                }
+                if (*p == 0) {
+                    co_return std::unexpected(fiber::common::IoErr::ConnReset);
+                }
+                continue;
             }
-            ParseCode code = hdr_parser.replace_buf_ptr(chain, next);
-            if (code != ParseCode::Ok) {
-                co_return code;
-            }
-            chain = next;
-        }
-        if (chain->readable() == 0) {
-            auto p = co_await transport_->read_into(chain, options_.keep_alive_timeout);
-            if (!p) {
-                co_return std::unexpected(p.error());
-            }
-            header_len += *p;
-        }
-        ParseCode code = hdr_parser.execute(chain);
-        if (code == ParseCode::Ok) {
-            const auto &line = hdr_parser.state();
-            if (!line.header_name_start || !line.header_name_end || line.header_name_end < line.header_name_start) {
-                co_return ParseCode::InvalidHeader;
-            }
-            std::size_t name_len = static_cast<std::size_t>(line.header_name_end - line.header_name_start);
-            std::string_view name(reinterpret_cast<char *>(line.header_name_start), name_len);
-            std::string_view value;
-            if (line.header_start && line.header_end && line.header_end >= line.header_start) {
-                std::size_t value_len = static_cast<std::size_t>(line.header_end - line.header_start);
-                value = std::string_view(reinterpret_cast<char *>(line.header_start), value_len);
-            }
-            char *lowercase = static_cast<char *>(exchange.pool_.alloc(name_len));
-            if (lowercase == nullptr) {
-                co_return std::unexpected(common::IoErr::NoMem);
-            }
-            if (line.lowcase_index == name_len) {
-                ::memcpy(lowercase, line.lowcase_header, name_len);
-            } else {
-                to_lowercase(name, lowercase);
-            }
-
-            uint32_t hash = line.header_hash;
-
-            HttpHeaders::HeaderField *field = exchange.request_headers_.add_view(name, value, lowercase, hash);
-            if (!field) {
-                co_return std::unexpected(common::IoErr::NoMem);
-            }
-            if (auto *handler = header_handler_map().get(std::string_view(lowercase, name_len), hash)) {
-                if (!(*handler)(exchange, *field)) {
+            if (code == ParseCode::Ok) {
+                const auto &line = hdr_parser.state();
+                if (!line.header_name_start || !line.header_name_end || line.header_name_end < line.header_name_start) {
                     co_return ParseCode::InvalidHeader;
                 }
-            }
+                std::size_t name_len = static_cast<std::size_t>(line.header_name_end - line.header_name_start);
+                std::string_view name(reinterpret_cast<char *>(line.header_name_start), name_len);
+                std::string_view value;
+                if (line.header_start && line.header_end && line.header_end >= line.header_start) {
+                    std::size_t value_len = static_cast<std::size_t>(line.header_end - line.header_start);
+                    value = std::string_view(reinterpret_cast<char *>(line.header_start), value_len);
+                }
+                char *lowercase = static_cast<char *>(exchange.pool_.alloc(name_len));
+                if (lowercase == nullptr) {
+                    co_return std::unexpected(common::IoErr::NoMem);
+                }
+                if (line.lowcase_index == name_len) {
+                    ::memcpy(lowercase, line.lowcase_header, name_len);
+                } else {
+                    to_lowercase(name, lowercase);
+                }
 
-            goto parse_line;
+                uint32_t hash = line.header_hash;
+
+                HttpHeaders::HeaderField *field = exchange.request_headers_.add_view(name, value, lowercase, hash);
+                if (!field) {
+                    co_return std::unexpected(common::IoErr::NoMem);
+                }
+                if (auto *handler = header_handler_map().get(std::string_view(lowercase, name_len), hash)) {
+                    if (!(*handler)(exchange, *field)) {
+                        co_return ParseCode::InvalidHeader;
+                    }
+                }
+                continue;
+            }
+            if (code == ParseCode::HeaderDone) {
+                mem::IoBuf header_owner = parse_buf;
+                const std::size_t header_bytes = static_cast<std::size_t>(parse_buf.readable_data() - parse_buf.data());
+                header_owner.reset();
+                header_owner.commit(header_bytes);
+                if (!exchange.header_bufs_.append(std::move(header_owner))) {
+                    co_return std::unexpected(common::IoErr::NoMem);
+                }
+
+                mem::IoBufChain body_bufs;
+                if (parse_buf.readable() > 0) {
+                    mem::IoBuf body_prefix = parse_buf.retain_slice(0, parse_buf.readable());
+                    if (!body_bufs.append(std::move(body_prefix))) {
+                        co_return std::unexpected(common::IoErr::NoMem);
+                    }
+                }
+
+                exchange.set_io(std::make_unique<Http1ExchangeIo>(*transport_, options_, std::move(body_bufs)));
+                co_return ParseCode::Ok;
+            }
+            if (code != ParseCode::Again) {
+                co_return code;
+            }
         }
-        if (code == ParseCode::Again) {
-            goto parse_line;
-        }
-        if (code == ParseCode::HeaderDone) {
-            BufChain *header_adjacent_body = chain->readable() > 0 ? chain : nullptr;
-            exchange.set_io(std::make_unique<Http1ExchangeIo>(*transport_, options_, header_adjacent_body));
-            co_return ParseCode::Ok;
-        }
-        co_return code;
     }
 }
 
