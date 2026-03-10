@@ -50,7 +50,7 @@ private:
     struct StreamContext {
         int32_t stream_id = 0;
         std::unique_ptr<HttpExchange> exchange;
-        Http2ExchangeIo *io = nullptr;
+        std::unique_ptr<Http2ExchangeIo> io;
         bool headers_complete = false;
         bool request_end_stream = false;
         bool handler_started = false;

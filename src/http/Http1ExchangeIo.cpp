@@ -389,7 +389,6 @@ fiber::async::Task<common::IoResult<void>> Http1ExchangeIo::send_response_header
     close_after_response_ = close_conn;
     if (close_conn) {
         exchange.response_close_ = true;
-        connection_->request_connection_close();
     }
     co_return common::IoResult<void>{};
 }
@@ -468,7 +467,6 @@ fiber::async::Task<common::IoResult<size_t>> Http1ExchangeIo::write_body(HttpExc
         if (!exchange.response_content_length_set_ && !exchange.response_chunked_) {
             exchange.response_close_ = true;
             close_after_response_ = true;
-            connection_->request_connection_close();
         }
     }
     co_return len;

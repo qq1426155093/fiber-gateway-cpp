@@ -458,9 +458,8 @@ common::IoResult<Http2Connection::StreamContext *> Http2Connection::create_reque
     stream->stream_id = stream_id;
     stream->exchange = std::make_unique<HttpExchange>(options_);
 
-    auto io = std::make_unique<Http2ExchangeIo>(session_, stream_id, [this]() { request_flush(); });
-    stream->io = io.get();
-    stream->exchange->set_io(std::move(io));
+    stream->io = std::make_unique<Http2ExchangeIo>(session_, stream_id, [this]() { request_flush(); });
+    stream->exchange->set_io(stream->io.get());
 
     StreamContext *ptr = stream.get();
     streams_.emplace(stream_id, std::move(stream));

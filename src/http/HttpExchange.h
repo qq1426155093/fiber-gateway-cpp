@@ -77,7 +77,7 @@ public:
 
 
 private:
-    void set_io(std::unique_ptr<HttpExchangeIo> io) noexcept;
+    void set_io(HttpExchangeIo *io) noexcept;
 
     friend class RequestLineParser;
     friend class HeaderLineParser;
@@ -105,7 +105,7 @@ private:
     size_t request_content_length_ = 0;
     bool request_close_ = false;
     bool request_keep_alive_ = false;
-    std::unique_ptr<HttpExchangeIo> io_;
+    HttpExchangeIo *io_ = nullptr;
 };
 
 using HttpHandler = std::function<fiber::async::Task<void>(HttpExchange &)>;

@@ -223,25 +223,6 @@ common::IoResult<void> Http1Connection::grow_header_buffer(mem::IoBuf &buffer, s
 }
 
 fiber::async::Task<fiber::common::IoResult<ParseCode>> Http1Connection::parse_request(HttpExchange &exchange) {
-    exchange.request_headers_.clear();
-    exchange.response_headers_.clear();
-    exchange.header_bufs_.clear();
-    exchange.method_ = HttpMethod::Unknown;
-    exchange.version_ = HttpVersion::HTTP_1_1;
-    exchange.uri_ = HttpUri{};
-    exchange.method_view_ = {};
-    exchange.version_view_ = {};
-    exchange.set_io(nullptr);
-    exchange.request_chunked_ = false;
-    exchange.request_content_length_set_ = false;
-    exchange.request_content_length_ = 0;
-    exchange.request_close_ = false;
-    exchange.request_keep_alive_ = false;
-    exchange.response_chunked_ = false;
-    exchange.response_close_ = false;
-    exchange.response_content_length_set_ = false;
-    exchange.response_content_length_ = 0;
-
     std::size_t growth_count = 0;
     mem::IoBuf parse_buf = mem::IoBuf::allocate(options_.header_init_size);
     if (!parse_buf) {
@@ -431,34 +412,39 @@ fiber::async::Task<void> Http1Connection::run() {
             break;
         }
         if (*parse_result != ParseCode::Ok) {
-            request_connection_close();
             break;
         }
 
-        auto io = std::make_unique<Http1ExchangeIo>(*this, exchange);
-        Http1ExchangeIo *io_ptr = io.get();
-        exchange.set_io(std::move(io));
+        {
+            Http1ExchangeIo io(*this, exchange);
+            exchange.set_io(&io);
 
-        co_await handler_(exchange);
+            co_await handler_(exchange);
 
-        if (!io_ptr->request_body_complete()) {
-            if (options_.drain_unread_body) {
-                auto discard_result = co_await exchange.discard_body();
-                if (!discard_result) {
-                    request_connection_close();
+            if (!io.request_body_complete()) {
+                if (options_.drain_unread_body) {
+                    auto discard_result = co_await exchange.discard_body();
+                    if (!discard_result) {
+                        exchange.set_io(nullptr);
+                        break;
+                    }
+                } else {
+                    exchange.set_io(nullptr);
+                    break;
                 }
-            } else {
-                request_connection_close();
             }
-        }
 
-        if (!io_ptr->response_complete()) {
-            request_connection_close();
-        }
+            if (!io.response_complete()) {
+                exchange.set_io(nullptr);
+                break;
+            }
 
-        if ((server_ && server_->shutting_down()) || close_after_response_.load(std::memory_order_acquire) ||
-            !io_ptr->should_keep_alive(exchange)) {
-            break;
+            if ((server_ && server_->shutting_down()) || !io.should_keep_alive(exchange)) {
+                exchange.set_io(nullptr);
+                break;
+            }
+
+            exchange.set_io(nullptr);
         }
     }
 
@@ -470,10 +456,6 @@ fiber::async::Task<void> Http1Connection::run() {
 }
 
 bool Http1Connection::stopping() const noexcept { return server_ && server_->shutting_down(); }
-
-void Http1Connection::request_connection_close() noexcept {
-    close_after_response_.store(true, std::memory_order_release);
-}
 
 void Http1Connection::finish() noexcept {
     if (finished_.exchange(true, std::memory_order_acq_rel)) {

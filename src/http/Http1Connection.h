@@ -30,7 +30,6 @@ public:
     ~Http1Connection();
 
     fiber::async::Task<void> run();
-    void request_connection_close() noexcept;
 
     [[nodiscard]] event::EventLoop &loop() const noexcept { return loop_; }
     [[nodiscard]] HttpTransport &transport() noexcept { return *transport_; }
@@ -62,7 +61,6 @@ private:
     HttpServerOptions options_;
     mem::IoBufChain inbound_bufs_;
 
-    std::atomic<bool> close_after_response_{false};
     std::atomic<bool> finished_{false};
 };
 

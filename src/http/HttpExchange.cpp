@@ -15,7 +15,7 @@ HttpExchange::~HttpExchange() = default;
 
 std::string_view HttpExchange::header(std::string_view name) const noexcept { return request_headers_.get(name); }
 
-void HttpExchange::set_io(std::unique_ptr<HttpExchangeIo> io) noexcept { io_ = std::move(io); }
+void HttpExchange::set_io(HttpExchangeIo *io) noexcept { io_ = io; }
 
 fiber::async::Task<common::IoResult<ReadBodyChunk>> HttpExchange::read_body(std::size_t max_bytes) noexcept {
     if (!io_) {
