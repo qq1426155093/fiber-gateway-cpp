@@ -41,8 +41,6 @@ struct ReadBodyChunk {
 
 class Http1Connection;
 class Http1ExchangeIo;
-class Http2Connection;
-class Http2ExchangeIo;
 class HttpExchangeIo;
 class HttpTransport;
 class RequestLineParser;
@@ -83,8 +81,6 @@ private:
     friend class HeaderLineParser;
     friend class Http1Connection;
     friend class Http1ExchangeIo;
-    friend class Http2Connection;
-    friend class Http2ExchangeIo;
 
     fiber::mem::BufPool pool_;
     fiber::mem::IoBufChain header_bufs_;

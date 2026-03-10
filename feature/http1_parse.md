@@ -2,6 +2,8 @@
 
 ## Goals
 - Keep HTTP/1 request parsing inside `Http1Connection`.
+- Run `HttpServer` as a pure HTTP/1 server; TLS ALPN is normalized to avoid
+  advertising `h2`.
 - Use `IoBuf` / `IoBufChain` for header input, request body buffering, and
   keep-alive carry-over bytes.
 - Preserve zero-copy header views by letting `HttpExchange` retain header
@@ -38,7 +40,7 @@
   - appends trailing bytes after header completion back into `inbound_bufs_`
 
 ## Parsing Flow
-1. Reset per-request fields in `HttpExchange`.
+1. Construct a fresh `HttpExchange` for the request.
 2. Allocate a temporary header parse `IoBuf`.
 3. Parse the request line incrementally.
 4. Parse header lines incrementally.

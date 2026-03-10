@@ -18,7 +18,6 @@ enum class HttpVersion {
     HTTP_0_9 = 9,
     HTTP_1_0 = 1000,
     HTTP_1_1 = 1001,
-    HTTP_2_0 = 2000,
     HTTP_3_0 = 3000,
 };
 

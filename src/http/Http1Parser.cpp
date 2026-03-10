@@ -151,8 +151,6 @@ HttpVersion to_http_version(int version) {
             return HttpVersion::HTTP_1_0;
         case 1001:
             return HttpVersion::HTTP_1_1;
-        case 2000:
-            return HttpVersion::HTTP_2_0;
         case 3000:
             return HttpVersion::HTTP_3_0;
         default:

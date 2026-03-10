@@ -28,7 +28,6 @@ public:
 private:
     fiber::async::DetachedTask handle_connection(net::AcceptResult accept);
     fiber::async::Task<void> serve_http1(std::unique_ptr<HttpTransport> transport);
-    fiber::async::Task<void> serve_http2(std::unique_ptr<HttpTransport> transport);
 
     event::EventLoop &loop_;
     HttpHandler handler_;

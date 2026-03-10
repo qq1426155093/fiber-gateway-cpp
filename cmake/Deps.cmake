@@ -71,103 +71,6 @@ function(fiber_prepare_jemalloc_target)
         IMPORTED_LOCATION "${FIBER_JEMALLOC_INSTALL_DIR}/lib/libjemalloc.a")
 endfunction()
 
-function(fiber_prepare_nghttp2_target)
-    if (TARGET nghttp2::nghttp2)
-        return()
-    endif()
-
-    set(FIBER_NGHTTP2_VERSION "1.68.0")
-    # Version encoded as 0xMMmmpp for major/minor/patch.
-    set(FIBER_NGHTTP2_VERSION_NUM "0x014400")
-    set(FIBER_NGHTTP2_GENERATED_DIR "${CMAKE_BINARY_DIR}/_deps/nghttp2-generated")
-    set(HAVE_ARPA_INET_H OFF)
-    set(HAVE_CLOCK_GETTIME OFF)
-    set(HAVE_DECL_CLOCK_MONOTONIC OFF)
-    set(HAVE_NETINET_IN_H OFF)
-    if (UNIX AND NOT APPLE)
-        set(HAVE_ARPA_INET_H ON)
-        set(HAVE_CLOCK_GETTIME ON)
-        set(HAVE_DECL_CLOCK_MONOTONIC ON)
-        set(HAVE_NETINET_IN_H ON)
-    endif()
-
-    fiber_use_cached_content(nghttp2)
-    FetchContent_Declare(
-        nghttp2
-        URL "https://github.com/nghttp2/nghttp2/archive/refs/tags/v${FIBER_NGHTTP2_VERSION}.tar.gz"
-    )
-    FetchContent_GetProperties(nghttp2)
-    if (NOT nghttp2_POPULATED)
-        if (POLICY CMP0169)
-            cmake_policy(PUSH)
-            cmake_policy(SET CMP0169 OLD)
-            FetchContent_Populate(nghttp2)
-            cmake_policy(POP)
-        else()
-            FetchContent_Populate(nghttp2)
-        endif()
-    endif()
-
-    fiber_purge_cache_regex("NGHTTP3|NGTCP2")
-
-    file(MAKE_DIRECTORY "${FIBER_NGHTTP2_GENERATED_DIR}/nghttp2")
-    set(PACKAGE_VERSION "${FIBER_NGHTTP2_VERSION}")
-    set(PACKAGE_VERSION_NUM "${FIBER_NGHTTP2_VERSION_NUM}")
-    configure_file(
-        "${nghttp2_SOURCE_DIR}/lib/includes/nghttp2/nghttp2ver.h.in"
-        "${FIBER_NGHTTP2_GENERATED_DIR}/nghttp2/nghttp2ver.h"
-        @ONLY
-    )
-    configure_file(
-        "${CMAKE_CURRENT_LIST_DIR}/nghttp2-config.h.in"
-        "${FIBER_NGHTTP2_GENERATED_DIR}/config.h"
-        @ONLY
-    )
-
-    add_library(fiber_nghttp2 STATIC
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_pq.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_map.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_queue.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_frame.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_buf.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_stream.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_outbound_item.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_session.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_submit.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_helper.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_alpn.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_hd.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_hd_huffman.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_hd_huffman_data.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_version.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_priority_spec.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_option.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_callbacks.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_mem.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_http.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_rcbuf.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_extpri.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_ratelim.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_time.c"
-        "${nghttp2_SOURCE_DIR}/lib/nghttp2_debug.c"
-        "${nghttp2_SOURCE_DIR}/lib/sfparse.c"
-    )
-    target_include_directories(fiber_nghttp2
-        PUBLIC
-            "${nghttp2_SOURCE_DIR}/lib/includes"
-            "${FIBER_NGHTTP2_GENERATED_DIR}"
-        PRIVATE
-            "${FIBER_NGHTTP2_GENERATED_DIR}"
-            "${nghttp2_SOURCE_DIR}/lib"
-    )
-    target_compile_definitions(fiber_nghttp2
-        PUBLIC NGHTTP2_STATICLIB
-        PRIVATE BUILDING_NGHTTP2 HAVE_CONFIG_H
-    )
-
-    add_library(nghttp2::nghttp2 ALIAS fiber_nghttp2)
-endfunction()
-
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
@@ -189,8 +92,6 @@ endif()
 if (TARGET crypto AND NOT TARGET boringssl::crypto)
     add_library(boringssl::crypto ALIAS crypto)
 endif()
-
-fiber_prepare_nghttp2_target()
 
 set(BORINGSSL_INCLUDE_DIR "${boringssl_SOURCE_DIR}/include" CACHE PATH "" FORCE)
 set(BORINGSSL_LIBRARY_DIR "${boringssl_BINARY_DIR}" CACHE PATH "" FORCE)
