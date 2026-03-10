@@ -22,12 +22,14 @@ void ChunkParser::consume(off_t n) noexcept {
     size_ -= n;
 }
 
-ChunkParser::ParseCode ChunkParser::execute(BufChain *chain) noexcept {
+ChunkParser::ParseCode ChunkParser::execute(mem::IoBuf *chain) noexcept {
     if (!chain) {
         return ParseCode::Error;
     }
 
-    auto *pos = chain->pos;
+    auto *begin = chain->readable_data();
+    auto *pos = begin;
+    auto *end = chain->writable_data();
     State state = state_;
 
     if (state == State::ChunkData && size_ == 0) {
@@ -36,7 +38,7 @@ ChunkParser::ParseCode ChunkParser::execute(BufChain *chain) noexcept {
 
     ParseCode rc = ParseCode::Again;
 
-    for (; pos < chain->last; ++pos) {
+    for (; pos < end; ++pos) {
         unsigned char ch = *pos;
         unsigned char c;
 
@@ -200,7 +202,7 @@ ChunkParser::ParseCode ChunkParser::execute(BufChain *chain) noexcept {
 
 data:
     state_ = state;
-    chain->pos = pos;
+    chain->consume(static_cast<std::size_t>(pos - begin));
 
     if (size_ > std::numeric_limits<off_t>::max() - 5) {
         return ParseCode::Error;
@@ -242,7 +244,7 @@ data:
 
 done:
     state_ = State::ChunkStart;
-    chain->pos = pos + 1;
+    chain->consume(static_cast<std::size_t>((pos + 1) - begin));
     return ParseCode::Done;
 
 invalid:

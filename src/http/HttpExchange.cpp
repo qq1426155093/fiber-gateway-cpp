@@ -1,6 +1,5 @@
 #include "HttpExchange.h"
 
-#include <array>
 #include <utility>
 
 #include "HttpExchangeIo.h"
@@ -14,29 +13,24 @@ HttpExchange::HttpExchange(const HttpServerOptions &options) : request_headers_(
 
 HttpExchange::~HttpExchange() = default;
 
-std::string_view HttpExchange::header(std::string_view name) const noexcept {
-    return request_headers_.get(name);
-}
+std::string_view HttpExchange::header(std::string_view name) const noexcept { return request_headers_.get(name); }
 
-void HttpExchange::set_io(std::unique_ptr<HttpExchangeIo> io) noexcept {
-    io_ = std::move(io);
-}
+void HttpExchange::set_io(HttpExchangeIo *io) noexcept { io_ = io; }
 
-fiber::async::Task<common::IoResult<ReadBodyResult>> HttpExchange::read_body(void *buf, size_t len) noexcept {
+fiber::async::Task<common::IoResult<ReadBodyChunk>> HttpExchange::read_body(std::size_t max_bytes) noexcept {
     if (!io_) {
         co_return std::unexpected(common::IoErr::Invalid);
     }
-    co_return co_await io_->read_body(*this, buf, len);
+    co_return co_await io_->read_body(*this, max_bytes);
 }
 
 fiber::async::Task<common::IoResult<void>> HttpExchange::discard_body() noexcept {
-    std::array<char, 4096> buf{};
     for (;;) {
-        auto result = co_await read_body(buf.data(), buf.size());
+        auto result = co_await read_body(4096);
         if (!result) {
             co_return std::unexpected(result.error());
         }
-        if (result->end) {
+        if (result->last) {
             break;
         }
     }
@@ -58,9 +52,7 @@ void HttpExchange::set_response_chunked() {
     response_content_length_set_ = false;
 }
 
-void HttpExchange::set_response_close() {
-    response_close_ = true;
-}
+void HttpExchange::set_response_close() { response_close_ = true; }
 
 fiber::async::Task<common::IoResult<void>> HttpExchange::send_response_header(int status, std::string_view reason) {
     if (!io_) {
@@ -69,9 +61,8 @@ fiber::async::Task<common::IoResult<void>> HttpExchange::send_response_header(in
     co_return co_await io_->send_response_header(*this, status, reason);
 }
 
-fiber::async::Task<common::IoResult<size_t>> HttpExchange::write_body(const uint8_t *buf,
-                                                                       size_t len,
-                                                                       bool end) noexcept {
+fiber::async::Task<common::IoResult<size_t>> HttpExchange::write_body(const uint8_t *buf, size_t len,
+                                                                      bool end) noexcept {
     if (!io_) {
         co_return std::unexpected(common::IoErr::Invalid);
     }

@@ -1,4 +1,3 @@
-#include <array>
 #include <cerrno>
 #include <cstdint>
 #include <cstdlib>
@@ -43,20 +42,25 @@ fiber::common::IoResult<std::uint16_t> resolve_port(int fd) {
 }
 
 fiber::async::Task<void> handle_echo(fiber::http::HttpExchange &exchange) {
-    std::array<char, 4096> buffer{};
     std::string body;
     for (;;) {
-        auto read_result = co_await exchange.read_body(buffer.data(), buffer.size());
+        auto read_result = co_await exchange.read_body(4096);
         if (!read_result) {
             exchange.set_response_close();
             exchange.set_response_content_length(0);
             co_await exchange.send_response_header(400, "Bad Request");
             co_return;
         }
-        if (read_result->size > 0) {
-            body.append(buffer.data(), read_result->size);
+        while (auto *chunk = read_result->data_chain.front()) {
+            auto readable = chunk->readable();
+            if (readable == 0) {
+                read_result->data_chain.drop_empty_front();
+                break;
+            }
+            body.append(reinterpret_cast<const char *>(chunk->readable_data()), readable);
+            read_result->data_chain.consume_and_compact(readable);
         }
-        if (read_result->end) {
+        if (read_result->last) {
             break;
         }
     }

@@ -1,5 +1,6 @@
 include_guard()
 
+include(ExternalProject)
 include(FetchContent)
 
 if (NOT DEFINED FETCHCONTENT_BASE_DIR)
@@ -28,6 +29,48 @@ function(fiber_use_cached_content name)
     endif()
 endfunction()
 
+function(fiber_purge_cache_regex pattern)
+    get_cmake_property(cache_vars CACHE_VARIABLES)
+    foreach(cache_var IN LISTS cache_vars)
+        if (cache_var MATCHES "${pattern}")
+            unset(${cache_var} CACHE)
+        endif()
+    endforeach()
+endfunction()
+
+function(fiber_prepare_jemalloc_target)
+    if (TARGET fiber_jemalloc)
+        return()
+    endif()
+
+    set(FIBER_JEMALLOC_VERSION "5.3.0")
+    set(FIBER_JEMALLOC_SOURCE_DIR "${FETCHCONTENT_BASE_DIR}/jemalloc-src")
+    set(FIBER_JEMALLOC_BINARY_DIR "${CMAKE_BINARY_DIR}/_deps/jemalloc-build")
+    set(FIBER_JEMALLOC_INSTALL_DIR "${CMAKE_BINARY_DIR}/_deps/jemalloc-install")
+
+    ExternalProject_Add(
+        fiber_jemalloc_ep
+        URL "https://github.com/jemalloc/jemalloc/releases/download/${FIBER_JEMALLOC_VERSION}/jemalloc-${FIBER_JEMALLOC_VERSION}.tar.bz2"
+        SOURCE_DIR "${FIBER_JEMALLOC_SOURCE_DIR}"
+        BINARY_DIR "${FIBER_JEMALLOC_BINARY_DIR}"
+        INSTALL_DIR "${FIBER_JEMALLOC_INSTALL_DIR}"
+        CONFIGURE_COMMAND
+            ${CMAKE_COMMAND} -E env CC=${CMAKE_C_COMPILER}
+            <SOURCE_DIR>/configure
+            --prefix=<INSTALL_DIR>
+            --disable-shared
+            --enable-static
+        BUILD_COMMAND ${CMAKE_MAKE_PROGRAM}
+        INSTALL_COMMAND ${CMAKE_MAKE_PROGRAM} install
+        BUILD_BYPRODUCTS "${FIBER_JEMALLOC_INSTALL_DIR}/lib/libjemalloc.a"
+        UPDATE_DISCONNECTED ON
+    )
+
+    add_library(fiber_jemalloc UNKNOWN IMPORTED GLOBAL)
+    set_target_properties(fiber_jemalloc PROPERTIES
+        IMPORTED_LOCATION "${FIBER_JEMALLOC_INSTALL_DIR}/lib/libjemalloc.a")
+endfunction()
+
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
@@ -50,32 +93,6 @@ if (TARGET crypto AND NOT TARGET boringssl::crypto)
     add_library(boringssl::crypto ALIAS crypto)
 endif()
 
-set(ENABLE_APP OFF CACHE BOOL "" FORCE)
-set(ENABLE_DOC OFF CACHE BOOL "" FORCE)
-set(ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(ENABLE_HPACK_TOOLS OFF CACHE BOOL "" FORCE)
-set(ENABLE_LIB_ONLY ON CACHE BOOL "" FORCE)
-set(ENABLE_TESTS OFF CACHE BOOL "" FORCE)
-fiber_use_cached_content(nghttp2)
-FetchContent_Declare(
-    nghttp2
-    URL https://github.com/nghttp2/nghttp2/archive/refs/tags/v1.68.0.tar.gz
-)
-FetchContent_MakeAvailable(nghttp2)
-
-if (NOT TARGET nghttp2::nghttp2)
-    if (TARGET nghttp2)
-        get_target_property(_nghttp2_real nghttp2 ALIASED_TARGET)
-        if (_nghttp2_real)
-            add_library(nghttp2::nghttp2 ALIAS ${_nghttp2_real})
-        else()
-            add_library(nghttp2::nghttp2 ALIAS nghttp2)
-        endif()
-    elseif (TARGET nghttp2_static)
-        add_library(nghttp2::nghttp2 ALIAS nghttp2_static)
-    endif()
-endif()
-
 set(BORINGSSL_INCLUDE_DIR "${boringssl_SOURCE_DIR}/include" CACHE PATH "" FORCE)
 set(BORINGSSL_LIBRARY_DIR "${boringssl_BINARY_DIR}" CACHE PATH "" FORCE)
 set(BORINGSSL_ROOT_DIR "${boringssl_BINARY_DIR}" CACHE PATH "" FORCE)
@@ -87,24 +104,37 @@ set(LSQUIC_WEBTRANSPORT OFF CACHE BOOL "" FORCE)
 set(LSQUIC_LIBSSL BORINGSSL CACHE STRING "" FORCE)
 set(LIBSSL_DIR "${boringssl_SOURCE_DIR}" CACHE PATH "" FORCE)
 set(LIBSSL_LIB "${boringssl_BINARY_DIR}" CACHE PATH "" FORCE)
-fiber_use_cached_content(lsquic)
-FetchContent_Declare(
-    lsquic
-    GIT_REPOSITORY https://github.com/litespeedtech/lsquic.git
-    GIT_TAG v4.5.0
-    GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(lsquic)
+set(LIBSSL_LIB_ssl ssl CACHE STRING "" FORCE)
+set(LIBSSL_LIB_crypto crypto CACHE STRING "" FORCE)
+find_path(FIBER_ZLIB_INCLUDE_DIR NAMES zlib.h)
+find_library(FIBER_ZLIB_LIBRARY NAMES z)
+set(FIBER_HAVE_LSQUIC OFF)
+if (FIBER_ZLIB_INCLUDE_DIR AND FIBER_ZLIB_LIBRARY)
+    fiber_use_cached_content(lsquic)
+    FetchContent_Declare(
+        lsquic
+        GIT_REPOSITORY https://github.com/litespeedtech/lsquic.git
+        GIT_TAG v4.5.0
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(lsquic)
 
-if (NOT TARGET lsquic::lsquic)
-    if (TARGET lsquic)
-        get_target_property(_lsquic_real lsquic ALIASED_TARGET)
-        if (_lsquic_real)
-            add_library(lsquic::lsquic ALIAS ${_lsquic_real})
-        else()
-            add_library(lsquic::lsquic ALIAS lsquic)
+    if (NOT TARGET lsquic::lsquic)
+        if (TARGET lsquic)
+            get_target_property(_lsquic_real lsquic ALIASED_TARGET)
+            if (_lsquic_real)
+                add_library(lsquic::lsquic ALIAS ${_lsquic_real})
+            else()
+                add_library(lsquic::lsquic ALIAS lsquic)
+            endif()
+        elseif (TARGET lsquic_static)
+            add_library(lsquic::lsquic ALIAS lsquic_static)
         endif()
-    elseif (TARGET lsquic_static)
-        add_library(lsquic::lsquic ALIAS lsquic_static)
     endif()
+
+    if (TARGET lsquic::lsquic)
+        set(FIBER_HAVE_LSQUIC ON)
+    endif()
+else()
+    message(STATUS "Skipping lsquic dependency because zlib development files were not found")
 endif()

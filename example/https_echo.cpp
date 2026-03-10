@@ -187,8 +187,8 @@ fiber::async::DetachedTask run_demo_client(fiber::event::EventLoop *loop, fiber:
         fail("tls stream release fd failed", fiber::common::IoErr::BadFd);
         co_return;
     }
-    auto tls_stream = std::make_unique<fiber::net::TlsTcpStream>(stream->loop(), fd, stream->remote_addr());
-    auto transport_result = fiber::http::TlsTransport::create(std::move(tls_stream), client_ctx);
+    fiber::net::AcceptResult accept(fd, stream->remote_addr());
+    auto transport_result = fiber::http::TlsTransport::create(stream->loop(), std::move(accept), client_ctx);
     if (!transport_result) {
         fail("tls transport create failed", transport_result.error());
         co_return;

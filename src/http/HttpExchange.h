@@ -15,6 +15,7 @@
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
 #include "../common/mem/BufPool.h"
+#include "../common/mem/IoBuf.h"
 #include "HttpCommon.h"
 #include "HttpHeaders.h"
 #include "TlsOptions.h"
@@ -33,15 +34,13 @@ struct HttpServerOptions {
     TlsOptions tls{};
 };
 
-struct ReadBodyResult {
-    std::size_t size = 0;
-    bool end = false;
+struct ReadBodyChunk {
+    bool last = false;
+    mem::IoBufChain data_chain;
 };
 
-class Http1Context;
+class Http1Connection;
 class Http1ExchangeIo;
-class Http2Connection;
-class Http2ExchangeIo;
 class HttpExchangeIo;
 class HttpTransport;
 class RequestLineParser;
@@ -63,7 +62,7 @@ public:
     HttpHeaders &response_headers() noexcept { return response_headers_; };
     mem::BufPool &pool() noexcept { return pool_; }
 
-    fiber::async::Task<common::IoResult<ReadBodyResult>> read_body(void *buf, size_t len) noexcept;
+    fiber::async::Task<common::IoResult<ReadBodyChunk>> read_body(std::size_t max_bytes) noexcept;
     fiber::async::Task<common::IoResult<void>> discard_body() noexcept;
 
     void set_response_header(std::string_view name, std::string_view value);
@@ -76,16 +75,15 @@ public:
 
 
 private:
-    void set_io(std::unique_ptr<HttpExchangeIo> io) noexcept;
+    void set_io(HttpExchangeIo *io) noexcept;
 
     friend class RequestLineParser;
     friend class HeaderLineParser;
-    friend class Http1Context;
+    friend class Http1Connection;
     friend class Http1ExchangeIo;
-    friend class Http2Connection;
-    friend class Http2ExchangeIo;
 
     fiber::mem::BufPool pool_;
+    fiber::mem::IoBufChain header_bufs_;
     HttpMethod method_{};
     HttpVersion version_{};
     HttpUri uri_;
@@ -103,7 +101,7 @@ private:
     size_t request_content_length_ = 0;
     bool request_close_ = false;
     bool request_keep_alive_ = false;
-    std::unique_ptr<HttpExchangeIo> io_;
+    HttpExchangeIo *io_ = nullptr;
 };
 
 using HttpHandler = std::function<fiber::async::Task<void>(HttpExchange &)>;
