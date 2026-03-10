@@ -143,4 +143,4 @@ Deferred:
 - wrapping external memory
 - custom allocators/deleters
 - shared-write resize/compact logic
-- replacing the existing HTTP `BufChain`
+- allocator pooling on top of jemalloc, if profiling proves it worthwhile

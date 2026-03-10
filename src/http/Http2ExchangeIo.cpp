@@ -47,11 +47,8 @@ std::string to_lower_ascii(std::string_view in) {
 }
 
 bool is_h2_forbidden_header(std::string_view lower_name) {
-    return lower_name == "connection" ||
-           lower_name == "proxy-connection" ||
-           lower_name == "keep-alive" ||
-           lower_name == "transfer-encoding" ||
-           lower_name == "upgrade";
+    return lower_name == "connection" || lower_name == "proxy-connection" || lower_name == "keep-alive" ||
+           lower_name == "transfer-encoding" || lower_name == "upgrade";
 }
 
 HttpMethod parse_method(std::string_view method) {
@@ -110,7 +107,7 @@ common::IoResult<std::pair<bool, size_t>> parse_content_length(const HttpHeaders
     bool seen = false;
     size_t value = 0;
     auto range = headers.get_all("content-length");
-    for (const auto &field : range) {
+    for (const auto &field: range) {
         std::string_view text = field.value_view();
         unsigned long long parsed = 0;
         auto result = std::from_chars(text.data(), text.data() + text.size(), parsed, 10);
@@ -130,14 +127,13 @@ common::IoResult<std::pair<bool, size_t>> parse_content_length(const HttpHeaders
 
 } // namespace
 
-Http2ExchangeIo::Http2ExchangeIo(nghttp2_session *session, int32_t stream_id, FlushCallback on_flush)
-    : session_(session), stream_id_(stream_id), on_flush_(std::move(on_flush)) {
+Http2ExchangeIo::Http2ExchangeIo(nghttp2_session *session, int32_t stream_id, FlushCallback on_flush) :
+    session_(session), stream_id_(stream_id), on_flush_(std::move(on_flush)) {
     data_provider_.source.ptr = this;
     data_provider_.read_callback = &Http2ExchangeIo::data_source_read_callback;
 }
 
-common::IoResult<void> Http2ExchangeIo::on_request_header(HttpExchange &exchange,
-                                                          std::string_view name,
+common::IoResult<void> Http2ExchangeIo::on_request_header(HttpExchange &exchange, std::string_view name,
                                                           std::string_view value) {
     if (name.empty()) {
         return std::unexpected(common::IoErr::Invalid);
@@ -211,7 +207,8 @@ common::IoResult<void> Http2ExchangeIo::on_request_headers_complete(HttpExchange
     } else {
         exchange.uri_.path = std::string_view(path_text_.data(), query_pos);
         if (query_pos + 1 < path_text_.size()) {
-            exchange.uri_.query = std::string_view(path_text_.data() + query_pos + 1, path_text_.size() - query_pos - 1);
+            exchange.uri_.query =
+                    std::string_view(path_text_.data() + query_pos + 1, path_text_.size() - query_pos - 1);
         }
     }
     std::string_view path_only = exchange.uri_.path;
@@ -251,23 +248,24 @@ void Http2ExchangeIo::append_request_body(std::string_view data) {
     }
 }
 
-void Http2ExchangeIo::mark_request_body_end() {
-    request_body_end_ = true;
-}
+void Http2ExchangeIo::mark_request_body_end() { request_body_end_ = true; }
 
-fiber::async::Task<common::IoResult<ReadBodyResult>> Http2ExchangeIo::read_body(HttpExchange &,
-                                                                                 void *buf,
-                                                                                 size_t len) noexcept {
-    ReadBodyResult out{};
-    if (!buf && len > 0) {
-        co_return std::unexpected(common::IoErr::Invalid);
-    }
-    if (request_body_read_ < request_body_.size() && len > 0) {
+fiber::async::Task<common::IoResult<ReadBodyChunk>> Http2ExchangeIo::read_body(HttpExchange &,
+                                                                               size_t max_bytes) noexcept {
+    ReadBodyChunk out{};
+    if (request_body_read_ < request_body_.size() && max_bytes > 0) {
         size_t available = request_body_.size() - request_body_read_;
-        size_t take = std::min(available, len);
-        std::memcpy(buf, request_body_.data() + request_body_read_, take);
+        size_t take = std::min(available, max_bytes);
+        mem::IoBuf buf = mem::IoBuf::allocate(take);
+        if (!buf) {
+            co_return std::unexpected(common::IoErr::NoMem);
+        }
+        std::memcpy(buf.writable_data(), request_body_.data() + request_body_read_, take);
+        buf.commit(take);
         request_body_read_ += take;
-        out.size = take;
+        if (!out.data_chain.append(std::move(buf))) {
+            co_return std::unexpected(common::IoErr::NoMem);
+        }
     }
     if (request_body_read_ >= request_body_.size()) {
         if (request_body_read_ > 0) {
@@ -275,18 +273,17 @@ fiber::async::Task<common::IoResult<ReadBodyResult>> Http2ExchangeIo::read_body(
             request_body_read_ = 0;
         }
         if (request_body_end_) {
-            out.end = true;
+            out.last = true;
         }
     }
-    if (out.size == 0 && !out.end) {
+    if (out.data_chain.readable_bytes() == 0 && !out.last) {
         co_return std::unexpected(common::IoErr::WouldBlock);
     }
     co_return out;
 }
 
-fiber::async::Task<common::IoResult<void>> Http2ExchangeIo::send_response_header(HttpExchange &exchange,
-                                                                                  int status,
-                                                                                  std::string_view reason) {
+fiber::async::Task<common::IoResult<void>> Http2ExchangeIo::send_response_header(HttpExchange &exchange, int status,
+                                                                                 std::string_view reason) {
     (void) reason;
     if (!session_ || stream_id_ <= 0) {
         co_return std::unexpected(common::IoErr::Invalid);
@@ -325,14 +322,12 @@ fiber::async::Task<common::IoResult<void>> Http2ExchangeIo::send_response_header
         fields.emplace_back("content-length", std::to_string(exchange.response_content_length_));
     }
 
-    bool end_immediately =
-        exchange.response_content_length_set_ &&
-        exchange.response_content_length_ == 0 &&
-        !exchange.response_chunked_;
+    bool end_immediately = exchange.response_content_length_set_ && exchange.response_content_length_ == 0 &&
+                           !exchange.response_chunked_;
 
     std::vector<nghttp2_nv> nva;
     nva.reserve(fields.size());
-    for (auto &field : fields) {
+    for (auto &field: fields) {
         nghttp2_nv nv{};
         nv.name = reinterpret_cast<uint8_t *>(field.first.data());
         nv.namelen = field.first.size();
@@ -359,10 +354,8 @@ fiber::async::Task<common::IoResult<void>> Http2ExchangeIo::send_response_header
     co_return common::IoResult<void>{};
 }
 
-fiber::async::Task<common::IoResult<size_t>> Http2ExchangeIo::write_body(HttpExchange &exchange,
-                                                                          const uint8_t *buf,
-                                                                          size_t len,
-                                                                          bool end) noexcept {
+fiber::async::Task<common::IoResult<size_t>> Http2ExchangeIo::write_body(HttpExchange &exchange, const uint8_t *buf,
+                                                                         size_t len, bool end) noexcept {
     if (len > 0 && buf == nullptr) {
         co_return std::unexpected(common::IoErr::Invalid);
     }
@@ -406,13 +399,8 @@ fiber::async::Task<common::IoResult<size_t>> Http2ExchangeIo::write_body(HttpExc
     co_return len;
 }
 
-nghttp2_ssize Http2ExchangeIo::data_source_read_callback(nghttp2_session *,
-                                                         int32_t,
-                                                         uint8_t *buf,
-                                                         size_t length,
-                                                         uint32_t *data_flags,
-                                                         nghttp2_data_source *source,
-                                                         void *) {
+nghttp2_ssize Http2ExchangeIo::data_source_read_callback(nghttp2_session *, int32_t, uint8_t *buf, size_t length,
+                                                         uint32_t *data_flags, nghttp2_data_source *source, void *) {
     if (!source || !source->ptr) {
         return NGHTTP2_ERR_CALLBACK_FAILURE;
     }

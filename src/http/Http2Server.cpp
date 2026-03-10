@@ -56,11 +56,10 @@ fiber::async::DetachedTask Http2Server::serve() {
         fiber::async::spawn(loop_, [this, accept = std::move(accept)]() mutable -> fiber::async::DetachedTask {
             std::unique_ptr<HttpTransport> transport;
             if (options_.tls.enabled) {
-                auto tls_stream = std::make_unique<net::TlsTcpStream>(loop_, accept.release_fd(), accept.take_peer());
                 if (!tls_ctx_) {
                     co_return;
                 }
-                auto tls_result = TlsTransport::create(std::move(tls_stream), *tls_ctx_);
+                auto tls_result = TlsTransport::create(loop_, std::move(accept), *tls_ctx_);
                 if (!tls_result) {
                     co_return;
                 }
@@ -71,9 +70,11 @@ fiber::async::DetachedTask Http2Server::serve() {
                     co_return;
                 }
             } else {
-                std::unique_ptr<net::TcpStream> stream =
-                        std::make_unique<net::TcpStream>(loop_, accept.release_fd(), accept.take_peer());
-                transport = std::make_unique<TcpTransport>(std::move(stream));
+                auto tcp_result = TcpTransport::create(loop_, std::move(accept));
+                if (!tcp_result) {
+                    co_return;
+                }
+                transport = std::move(*tcp_result);
             }
 
             Http2Connection conn(loop_, std::move(transport), handler_, options_);

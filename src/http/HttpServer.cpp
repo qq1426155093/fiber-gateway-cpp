@@ -1,6 +1,7 @@
 #include "HttpServer.h"
 
 #include <algorithm>
+#include <memory>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -8,7 +9,7 @@
 #include "../async/Spawn.h"
 #include "../common/IoError.h"
 #include "../net/TcpStream.h"
-#include "Http1Context.h"
+#include "Http1Connection.h"
 #include "Http2Connection.h"
 #include "HttpTransport.h"
 
@@ -95,11 +96,10 @@ fiber::async::DetachedTask HttpServer::handle_connection(net::AcceptResult accep
     std::unique_ptr<HttpTransport> transport;
     bool use_http2 = false;
     if (options_.tls.enabled) {
-        auto tls_stream = std::make_unique<net::TlsTcpStream>(loop_, accept.release_fd(), accept.take_peer());
         if (!tls_ctx_) {
             co_return;
         }
-        auto tls_result = TlsTransport::create(std::move(tls_stream), *tls_ctx_);
+        auto tls_result = TlsTransport::create(loop_, std::move(accept), *tls_ctx_);
         if (!tls_result) {
             co_return;
         }
@@ -111,9 +111,11 @@ fiber::async::DetachedTask HttpServer::handle_connection(net::AcceptResult accep
         }
         use_http2 = transport->negotiated_alpn() == kAlpnH2;
     } else {
-        std::unique_ptr<net::TcpStream> stream =
-                std::make_unique<net::TcpStream>(loop_, accept.release_fd(), accept.take_peer());
-        transport = std::make_unique<TcpTransport>(std::move(stream));
+        auto tcp_result = TcpTransport::create(loop_, std::move(accept));
+        if (!tcp_result) {
+            co_return;
+        }
+        transport = std::move(*tcp_result);
     }
 
     if (use_http2) {
@@ -129,20 +131,8 @@ fiber::async::Task<void> HttpServer::serve_http1(std::unique_ptr<HttpTransport> 
     if (!transport) {
         co_return;
     }
-    Http1Context context(*transport, options_);
-    HttpExchange exchange(options_);
-    auto parse_result = co_await context.parse_request(exchange);
-    if (!parse_result || *parse_result != ParseCode::Ok) {
-        transport->close();
-        co_return;
-    }
-    co_await handler_(exchange);
-    auto shutdown_result = co_await transport->shutdown(options_.write_timeout);
-    if (!shutdown_result) {
-        transport->close();
-        co_return;
-    }
-    transport->close();
+    Http1Connection connection(nullptr, std::move(transport), handler_, options_);
+    co_await connection.run();
     co_return;
 }
 

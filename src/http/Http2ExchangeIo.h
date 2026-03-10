@@ -26,24 +26,16 @@ public:
     void append_request_body(std::string_view data);
     void mark_request_body_end();
 
-    fiber::async::Task<common::IoResult<ReadBodyResult>> read_body(HttpExchange &exchange,
-                                                                    void *buf,
-                                                                    size_t len) noexcept override;
-    fiber::async::Task<common::IoResult<void>> send_response_header(HttpExchange &exchange,
-                                                                     int status,
-                                                                     std::string_view reason) override;
-    fiber::async::Task<common::IoResult<size_t>> write_body(HttpExchange &exchange,
-                                                             const uint8_t *buf,
-                                                             size_t len,
-                                                             bool end) noexcept override;
+    fiber::async::Task<common::IoResult<ReadBodyChunk>> read_body(HttpExchange &exchange,
+                                                                  size_t max_bytes) noexcept override;
+    fiber::async::Task<common::IoResult<void>> send_response_header(HttpExchange &exchange, int status,
+                                                                    std::string_view reason) override;
+    fiber::async::Task<common::IoResult<size_t>> write_body(HttpExchange &exchange, const uint8_t *buf, size_t len,
+                                                            bool end) noexcept override;
 
 private:
-    static nghttp2_ssize data_source_read_callback(nghttp2_session *session,
-                                                   int32_t stream_id,
-                                                   uint8_t *buf,
-                                                   size_t length,
-                                                   uint32_t *data_flags,
-                                                   nghttp2_data_source *source,
+    static nghttp2_ssize data_source_read_callback(nghttp2_session *session, int32_t stream_id, uint8_t *buf,
+                                                   size_t length, uint32_t *data_flags, nghttp2_data_source *source,
                                                    void *user_data);
     nghttp2_ssize read_response_data(uint8_t *buf, size_t length, uint32_t *data_flags);
     static common::IoErr map_nghttp2_error(int rc) noexcept;

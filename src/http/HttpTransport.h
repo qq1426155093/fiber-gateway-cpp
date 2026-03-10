@@ -11,6 +11,7 @@
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
 #include "../common/mem/IoBuf.h"
+#include "../net/TcpListener.h"
 #include "../net/TcpStream.h"
 #include "../net/TlsTcpStream.h"
 #include "TlsContext.h"
@@ -43,7 +44,7 @@ public:
 
 class TcpTransport final : public HttpTransport {
 public:
-    explicit TcpTransport(std::unique_ptr<net::TcpStream> stream);
+    static common::IoResult<std::unique_ptr<TcpTransport>> create(event::EventLoop &loop, net::AcceptResult &&accept);
 
     fiber::async::Task<common::IoResult<void>> handshake(std::chrono::milliseconds timeout) override;
     fiber::async::Task<common::IoResult<void>> shutdown(std::chrono::milliseconds timeout) override;
@@ -64,13 +65,15 @@ public:
     [[nodiscard]] const net::SocketAddress &remote_addr() const noexcept override;
 
 private:
-    std::unique_ptr<net::TcpStream> stream_;
+    TcpTransport(event::EventLoop &loop, int fd, net::SocketAddress remote_addr);
+
+    net::TcpStream stream_;
 };
 
 class TlsTransport final : public HttpTransport {
 public:
     ~TlsTransport() override;
-    static common::IoResult<std::unique_ptr<TlsTransport>> create(std::unique_ptr<net::TlsTcpStream> stream,
+    static common::IoResult<std::unique_ptr<TlsTransport>> create(event::EventLoop &loop, net::AcceptResult &&accept,
                                                                   TlsContext &context);
 
     fiber::async::Task<common::IoResult<void>> handshake(std::chrono::milliseconds timeout) override;
@@ -92,10 +95,10 @@ public:
     [[nodiscard]] const net::SocketAddress &remote_addr() const noexcept override;
 
 private:
-    TlsTransport(std::unique_ptr<net::TlsTcpStream> stream, TlsContext &context);
+    TlsTransport(event::EventLoop &loop, int fd, net::SocketAddress remote_addr, TlsContext &context);
     common::IoResult<void> init();
 
-    std::unique_ptr<net::TlsTcpStream> stream_;
+    net::TlsTcpStream stream_;
     TlsContext *context_ = nullptr;
 };
 

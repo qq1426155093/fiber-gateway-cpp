@@ -34,12 +34,12 @@ struct HttpServerOptions {
     TlsOptions tls{};
 };
 
-struct ReadBodyResult {
-    std::size_t size = 0;
-    bool end = false;
+struct ReadBodyChunk {
+    bool last = false;
+    mem::IoBufChain data_chain;
 };
 
-class Http1Context;
+class Http1Connection;
 class Http1ExchangeIo;
 class Http2Connection;
 class Http2ExchangeIo;
@@ -64,7 +64,7 @@ public:
     HttpHeaders &response_headers() noexcept { return response_headers_; };
     mem::BufPool &pool() noexcept { return pool_; }
 
-    fiber::async::Task<common::IoResult<ReadBodyResult>> read_body(void *buf, size_t len) noexcept;
+    fiber::async::Task<common::IoResult<ReadBodyChunk>> read_body(std::size_t max_bytes) noexcept;
     fiber::async::Task<common::IoResult<void>> discard_body() noexcept;
 
     void set_response_header(std::string_view name, std::string_view value);
@@ -81,7 +81,7 @@ private:
 
     friend class RequestLineParser;
     friend class HeaderLineParser;
-    friend class Http1Context;
+    friend class Http1Connection;
     friend class Http1ExchangeIo;
     friend class Http2Connection;
     friend class Http2ExchangeIo;
