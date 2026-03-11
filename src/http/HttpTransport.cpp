@@ -131,7 +131,7 @@ fiber::async::Task<common::IoResult<size_t>> TcpTransport::write(mem::IoBuf &buf
 fiber::async::Task<common::IoResult<size_t>> TcpTransport::writev(mem::IoBufChain &buf,
                                                                   std::chrono::milliseconds timeout) {
     std::array<iovec, kMaxIov> iov{};
-    int count = buf.fill_read_iov(iov.data(), static_cast<int>(iov.size()));
+    int count = buf.fill_write_iov(iov.data(), static_cast<int>(iov.size()));
     if (count == 0) {
         co_return static_cast<size_t>(0);
     }

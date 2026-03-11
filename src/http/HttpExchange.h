@@ -34,10 +34,12 @@ struct HttpServerOptions {
     TlsOptions tls{};
 };
 
-struct ReadBodyChunk {
+struct BodyChunk {
     bool last = false;
     mem::IoBufChain data_chain;
 };
+
+using ReadBodyChunk = BodyChunk;
 
 enum class ResponseBodyMode : std::uint8_t {
     Auto,
@@ -76,7 +78,7 @@ public:
     HttpHeaders &response_trailers() noexcept { return response_trailers_; }
     mem::BufPool &pool() noexcept { return pool_; }
 
-    fiber::async::Task<common::IoResult<ReadBodyChunk>> read_body(std::size_t max_bytes) noexcept;
+    fiber::async::Task<common::IoResult<BodyChunk>> read_body(std::size_t max_bytes) noexcept;
     fiber::async::Task<common::IoResult<void>> discard_body() noexcept;
 
     void set_response_header(std::string_view name, std::string_view value);
@@ -87,6 +89,7 @@ public:
 
     fiber::async::Task<common::IoResult<void>> send_response_header(int status, std::string_view reason = {});
     fiber::async::Task<common::IoResult<void>> finish_response() noexcept;
+    fiber::async::Task<common::IoResult<size_t>> write_body(BodyChunk chunk) noexcept;
     fiber::async::Task<common::IoResult<size_t>> write_body(const uint8_t *buf, size_t len, bool end) noexcept;
 
 

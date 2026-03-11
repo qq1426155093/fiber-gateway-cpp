@@ -23,7 +23,7 @@ std::string_view HttpExchange::header(std::string_view name) const noexcept { re
 
 void HttpExchange::set_io(HttpExchangeIo *io) noexcept { io_ = io; }
 
-fiber::async::Task<common::IoResult<ReadBodyChunk>> HttpExchange::read_body(std::size_t max_bytes) noexcept {
+fiber::async::Task<common::IoResult<BodyChunk>> HttpExchange::read_body(std::size_t max_bytes) noexcept {
     if (!io_) {
         co_return std::unexpected(common::IoErr::Invalid);
     }
@@ -72,6 +72,13 @@ fiber::async::Task<common::IoResult<void>> HttpExchange::finish_response() noexc
         co_return std::unexpected(common::IoErr::Invalid);
     }
     co_return co_await io_->finish_response(*this);
+}
+
+fiber::async::Task<common::IoResult<size_t>> HttpExchange::write_body(BodyChunk chunk) noexcept {
+    if (!io_) {
+        co_return std::unexpected(common::IoErr::Invalid);
+    }
+    co_return co_await io_->write_body(*this, std::move(chunk));
 }
 
 fiber::async::Task<common::IoResult<size_t>> HttpExchange::write_body(const uint8_t *buf, size_t len,

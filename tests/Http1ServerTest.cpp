@@ -11,6 +11,8 @@
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
+#include <utility>
+#include <vector>
 
 #include "async/Sleep.h"
 #include "async/Spawn.h"
@@ -276,6 +278,77 @@ TEST(Http1ServerTest, ChunkedPost) {
 
     EXPECT_NE(response.find("200"), std::string::npos);
     EXPECT_NE(response.find("Wikipedia"), std::string::npos);
+
+    fiber::async::spawn(group.at(0), [&]() { return stop_server(&group.at(0), server); });
+    group.join();
+    delete server;
+}
+
+TEST(Http1ServerTest, WriteBodyAcceptsBodyChunk) {
+    fiber::event::EventLoopGroup group(1);
+    group.start();
+
+    std::promise<uint16_t> port_promise;
+    std::promise<fiber::http::Http1Server *> server_promise;
+    auto port_future = port_promise.get_future();
+    auto server_future = server_promise.get_future();
+
+    fiber::async::spawn(group.at(0), [&]() {
+        auto handler = [](fiber::http::HttpExchange &exchange) -> fiber::async::Task<void> {
+            std::vector<fiber::http::BodyChunk> chunks;
+
+            for (;;) {
+                auto read_result = co_await exchange.read_body(4);
+                if (!read_result) {
+                    co_return;
+                }
+
+                bool last = read_result->last;
+                chunks.push_back(std::move(*read_result));
+                if (last) {
+                    break;
+                }
+            }
+
+            exchange.set_response_content_length(9);
+            auto header_result = co_await exchange.send_response_header(200);
+            if (!header_result) {
+                co_return;
+            }
+
+            for (auto &chunk : chunks) {
+                auto write_result = co_await exchange.write_body(std::move(chunk));
+                if (!write_result) {
+                    co_return;
+                }
+            }
+            co_return;
+        };
+        return start_server(&group.at(0), handler, nullptr, &port_promise, &server_promise);
+    });
+
+    uint16_t port = port_future.get();
+    ASSERT_NE(port, 0);
+    auto *server = server_future.get();
+    ASSERT_NE(server, nullptr);
+
+    int client = connect_client(port);
+    ASSERT_GE(client, 0);
+
+    const char *request = "POST /echo HTTP/1.1\r\n"
+                          "Host: localhost\r\n"
+                          "Content-Length: 9\r\n"
+                          "Connection: close\r\n"
+                          "\r\n"
+                          "Wikipedia";
+    ASSERT_EQ(::send(client, request, std::strlen(request), 0), static_cast<ssize_t>(std::strlen(request)));
+
+    std::string response = recv_all(client);
+    ::close(client);
+
+    EXPECT_NE(response.find("200"), std::string::npos) << response;
+    EXPECT_NE(response.find("Content-Length: 9"), std::string::npos) << response;
+    EXPECT_NE(response.find("\r\n\r\nWikipedia"), std::string::npos) << response;
 
     fiber::async::spawn(group.at(0), [&]() { return stop_server(&group.at(0), server); });
     group.join();
