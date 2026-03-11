@@ -937,8 +937,342 @@ ParseCode HeaderLineParser::execute(mem::IoBuf *buffer) {
     }
 }
 
-BodyParser::BodyParser() = default;
+void ChunkedBodyParser::reset() noexcept {
+    state_ = State::ChunkStart;
+    size_ = 0;
+    length_ = 0;
+}
 
-void BodyParser::reset() {}
+void ChunkedBodyParser::consume(std::size_t n) noexcept {
+    if (n >= size_) {
+        size_ = 0;
+        return;
+    }
+    size_ -= n;
+}
+
+ParseCode ChunkedBodyParser::execute(mem::IoBuf *buffer) noexcept {
+    if (!buffer) {
+        return ParseCode::Error;
+    }
+
+    auto *begin = buffer->readable_data();
+    auto *pos = begin;
+    auto *end = buffer->writable_data();
+    State state = state_;
+
+    if (state == State::ChunkData && size_ == 0) {
+        state = State::AfterData;
+    }
+
+    ParseCode rc = ParseCode::Again;
+    constexpr std::size_t kMaxSize = std::numeric_limits<std::size_t>::max();
+
+    auto append_hex_digit = [&](unsigned char digit) {
+        if (size_ > (kMaxSize - digit) / 16) {
+            return false;
+        }
+        size_ = size_ * 16 + digit;
+        return true;
+    };
+
+    for (; pos < end; ++pos) {
+        unsigned char ch = *pos;
+        unsigned char c;
+
+        switch (state) {
+            case State::ChunkStart:
+                if (ch >= '0' && ch <= '9') {
+                    state = State::ChunkSize;
+                    size_ = ch - '0';
+                    break;
+                }
+                c = static_cast<unsigned char>(ch | 0x20);
+                if (c >= 'a' && c <= 'f') {
+                    state = State::ChunkSize;
+                    size_ = c - 'a' + 10;
+                    break;
+                }
+                goto invalid;
+
+            case State::ChunkSize:
+                if (ch >= '0' && ch <= '9') {
+                    if (!append_hex_digit(static_cast<unsigned char>(ch - '0'))) {
+                        goto invalid;
+                    }
+                    break;
+                }
+                c = static_cast<unsigned char>(ch | 0x20);
+                if (c >= 'a' && c <= 'f') {
+                    if (!append_hex_digit(static_cast<unsigned char>(c - 'a' + 10))) {
+                        goto invalid;
+                    }
+                    break;
+                }
+                if (size_ == 0) {
+                    switch (ch) {
+                        case '\r':
+                            state = State::LastChunkExtensionAlmostDone;
+                            break;
+                        case '\n':
+                            state = State::Trailer;
+                            break;
+                        case ';':
+                        case ' ':
+                        case '\t':
+                            state = State::LastChunkExtension;
+                            break;
+                        default:
+                            goto invalid;
+                    }
+                    break;
+                }
+                switch (ch) {
+                    case '\r':
+                        state = State::ChunkExtensionAlmostDone;
+                        break;
+                    case '\n':
+                        state = State::ChunkData;
+                        break;
+                    case ';':
+                    case ' ':
+                    case '\t':
+                        state = State::ChunkExtension;
+                        break;
+                    default:
+                        goto invalid;
+                }
+                break;
+
+            case State::ChunkExtension:
+                switch (ch) {
+                    case '\r':
+                        state = State::ChunkExtensionAlmostDone;
+                        break;
+                    case '\n':
+                        state = State::ChunkData;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+
+            case State::ChunkExtensionAlmostDone:
+                if (ch == '\n') {
+                    state = State::ChunkData;
+                    break;
+                }
+                goto invalid;
+
+            case State::ChunkData:
+                rc = ParseCode::Ok;
+                goto data;
+
+            case State::AfterData:
+                switch (ch) {
+                    case '\r':
+                        state = State::AfterDataAlmostDone;
+                        break;
+                    case '\n':
+                        state = State::ChunkStart;
+                        break;
+                    default:
+                        goto invalid;
+                }
+                break;
+
+            case State::AfterDataAlmostDone:
+                if (ch == '\n') {
+                    state = State::ChunkStart;
+                    break;
+                }
+                goto invalid;
+
+            case State::LastChunkExtension:
+                switch (ch) {
+                    case '\r':
+                        state = State::LastChunkExtensionAlmostDone;
+                        break;
+                    case '\n':
+                        state = State::Trailer;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+
+            case State::LastChunkExtensionAlmostDone:
+                if (ch == '\n') {
+                    state = State::Trailer;
+                    break;
+                }
+                goto invalid;
+
+            case State::Trailer:
+                switch (ch) {
+                    case '\r':
+                        state = State::TrailerAlmostDone;
+                        break;
+                    case '\n':
+                        goto done;
+                    default:
+                        state = State::TrailerHeader;
+                        break;
+                }
+                break;
+
+            case State::TrailerAlmostDone:
+                if (ch == '\n') {
+                    goto done;
+                }
+                goto invalid;
+
+            case State::TrailerHeader:
+                switch (ch) {
+                    case '\r':
+                        state = State::TrailerHeaderAlmostDone;
+                        break;
+                    case '\n':
+                        state = State::Trailer;
+                        break;
+                    default:
+                        break;
+                }
+                break;
+
+            case State::TrailerHeaderAlmostDone:
+                if (ch == '\n') {
+                    state = State::Trailer;
+                    break;
+                }
+                goto invalid;
+        }
+    }
+
+data:
+    state_ = state;
+    buffer->consume(static_cast<std::size_t>(pos - begin));
+
+    if (size_ > kMaxSize - 5) {
+        return ParseCode::Error;
+    }
+
+    switch (state) {
+        case State::ChunkStart:
+            length_ = 3;
+            break;
+        case State::ChunkSize:
+            length_ = 1 + (size_ ? size_ + 4 : 1);
+            break;
+        case State::ChunkExtension:
+        case State::ChunkExtensionAlmostDone:
+            length_ = 1 + size_ + 4;
+            break;
+        case State::ChunkData:
+            length_ = size_ + 4;
+            break;
+        case State::AfterData:
+        case State::AfterDataAlmostDone:
+            length_ = 4;
+            break;
+        case State::LastChunkExtension:
+        case State::LastChunkExtensionAlmostDone:
+            length_ = 2;
+            break;
+        case State::Trailer:
+        case State::TrailerAlmostDone:
+            length_ = 1;
+            break;
+        case State::TrailerHeader:
+        case State::TrailerHeaderAlmostDone:
+            length_ = 2;
+            break;
+    }
+
+    return rc;
+
+done:
+    reset();
+    buffer->consume(static_cast<std::size_t>((pos + 1) - begin));
+    return ParseCode::Done;
+
+invalid:
+    return ParseCode::Error;
+}
+
+BodyParser::BodyParser() { reset(); }
+
+void BodyParser::reset() { set_none(); }
+
+void BodyParser::set_none() noexcept {
+    type_ = Type::None;
+    remaining_ = 0;
+    done_ = true;
+    chunked_parser_.reset();
+}
+
+void BodyParser::set_content_length(std::size_t length) noexcept {
+    type_ = Type::ContentLength;
+    remaining_ = length;
+    done_ = length == 0;
+    chunked_parser_.reset();
+}
+
+void BodyParser::set_chunked() noexcept {
+    type_ = Type::Chunked;
+    remaining_ = 0;
+    done_ = false;
+    chunked_parser_.reset();
+}
+
+std::size_t BodyParser::remaining() const noexcept {
+    switch (type_) {
+        case Type::None:
+            return 0;
+        case Type::ContentLength:
+            return remaining_;
+        case Type::Chunked:
+            return chunked_parser_.size();
+    }
+    return 0;
+}
+
+void BodyParser::consume(std::size_t n) noexcept {
+    switch (type_) {
+        case Type::None:
+            return;
+        case Type::ContentLength:
+            if (n >= remaining_) {
+                remaining_ = 0;
+                done_ = true;
+                return;
+            }
+            remaining_ -= n;
+            return;
+        case Type::Chunked:
+            chunked_parser_.consume(n);
+            return;
+    }
+}
+
+ParseCode BodyParser::execute(mem::IoBuf *buffer) noexcept {
+    switch (type_) {
+        case Type::None:
+            return ParseCode::Done;
+        case Type::ContentLength:
+            return done_ ? ParseCode::Done : ParseCode::Ok;
+        case Type::Chunked: {
+            if (done_) {
+                return ParseCode::Done;
+            }
+            ParseCode code = chunked_parser_.execute(buffer);
+            if (code == ParseCode::Done) {
+                done_ = true;
+            }
+            return code;
+        }
+    }
+    return ParseCode::Error;
+}
 
 } // namespace fiber::http

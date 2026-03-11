@@ -282,6 +282,64 @@ TEST(Http1ServerTest, ChunkedPost) {
     delete server;
 }
 
+TEST(Http1ServerTest, InvalidChunkedPostReturnsBadRequest) {
+    fiber::event::EventLoopGroup group(1);
+    group.start();
+
+    std::promise<uint16_t> port_promise;
+    std::promise<fiber::http::Http1Server *> server_promise;
+    auto port_future = port_promise.get_future();
+    auto server_future = server_promise.get_future();
+
+    fiber::async::spawn(group.at(0), [&]() {
+        auto handler = [](fiber::http::HttpExchange &exchange) -> fiber::async::Task<void> {
+            for (;;) {
+                auto read_result = co_await exchange.read_body(64);
+                if (!read_result) {
+                    exchange.set_response_close();
+                    exchange.set_response_content_length(0);
+                    co_await exchange.send_response_header(400, "Bad Request");
+                    co_return;
+                }
+                if (read_result->last) {
+                    break;
+                }
+            }
+            exchange.set_response_content_length(0);
+            co_await exchange.send_response_header(204, "No Content");
+            co_await exchange.write_body(nullptr, 0, true);
+            co_return;
+        };
+        return start_server(&group.at(0), handler, nullptr, &port_promise, &server_promise);
+    });
+
+    uint16_t port = port_future.get();
+    ASSERT_NE(port, 0);
+    auto *server = server_future.get();
+    ASSERT_NE(server, nullptr);
+
+    int client = connect_client(port);
+    ASSERT_GE(client, 0);
+
+    const char *request = "POST /echo HTTP/1.1\r\n"
+                          "Host: localhost\r\n"
+                          "Transfer-Encoding: chunked\r\n"
+                          "Connection: close\r\n"
+                          "\r\n"
+                          "+4\r\nWiki\r\n"
+                          "0\r\n\r\n";
+    ASSERT_EQ(::send(client, request, std::strlen(request), 0), static_cast<ssize_t>(std::strlen(request)));
+
+    std::string response = recv_all(client);
+    ::close(client);
+
+    EXPECT_NE(response.find("400 Bad Request"), std::string::npos);
+
+    fiber::async::spawn(group.at(0), [&]() { return stop_server(&group.at(0), server); });
+    group.join();
+    delete server;
+}
+
 TEST(Http1ServerTest, KeepAliveReuse) {
     fiber::event::EventLoopGroup group(1);
     group.start();

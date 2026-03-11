@@ -195,6 +195,7 @@ if(FIBER_BUILD_TESTS)
             tests/UnixStreamTest.cpp
             tests/UdpSocketTest.cpp
             tests/IpAddressTest.cpp
+            tests/Http1ParserTest.cpp
             tests/Http1ServerTest.cpp
         )
         target_link_libraries(fiber_tests PRIVATE fiber_lib GTest::gtest_main)

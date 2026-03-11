@@ -147,10 +147,60 @@ private:
     HeaderLineState line_{};
 };
 
+class ChunkedBodyParser : public common::NonCopyable, public common::NonMovable {
+public:
+    void reset() noexcept;
+    [[nodiscard]] std::size_t size() const noexcept { return size_; }
+    [[nodiscard]] std::size_t length() const noexcept { return length_; }
+    void consume(std::size_t n) noexcept;
+    ParseCode execute(mem::IoBuf *buffer) noexcept;
+
+private:
+    enum class State {
+        ChunkStart = 0,
+        ChunkSize,
+        ChunkExtension,
+        ChunkExtensionAlmostDone,
+        ChunkData,
+        AfterData,
+        AfterDataAlmostDone,
+        LastChunkExtension,
+        LastChunkExtensionAlmostDone,
+        Trailer,
+        TrailerAlmostDone,
+        TrailerHeader,
+        TrailerHeaderAlmostDone
+    };
+
+    State state_ = State::ChunkStart;
+    std::size_t size_ = 0;
+    std::size_t length_ = 0;
+};
+
 class BodyParser : public common::NonCopyable, public common::NonMovable {
 public:
+    enum class Type {
+        None,
+        ContentLength,
+        Chunked,
+    };
+
     BodyParser();
     void reset();
+    void set_none() noexcept;
+    void set_content_length(std::size_t length) noexcept;
+    void set_chunked() noexcept;
+    [[nodiscard]] Type type() const noexcept { return type_; }
+    [[nodiscard]] bool done() const noexcept { return done_; }
+    [[nodiscard]] std::size_t remaining() const noexcept;
+    void consume(std::size_t n) noexcept;
+    ParseCode execute(mem::IoBuf *buffer) noexcept;
+
+private:
+    Type type_ = Type::None;
+    std::size_t remaining_ = 0;
+    bool done_ = true;
+    ChunkedBodyParser chunked_parser_;
 };
 
 } // namespace fiber::http
