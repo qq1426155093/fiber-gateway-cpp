@@ -63,9 +63,13 @@ TEST(Http1ParserTest, ChunkedBodyParserSpansBuffersAndTrailers) {
     parser.consume(5);
     EXPECT_EQ(parser.remaining(), 0u);
     EXPECT_FALSE(parser.done());
-    EXPECT_EQ(parser.execute(&third), fiber::http::ParseCode::Done);
+    EXPECT_EQ(parser.execute(&third), fiber::http::ParseCode::BodyDone);
+    EXPECT_FALSE(parser.done());
+    EXPECT_EQ(readable_view(third), "X-Test: yes\r\n\r\n");
+
+    parser.finish_chunked_trailers();
     EXPECT_TRUE(parser.done());
-    EXPECT_EQ(third.readable(), 0u);
+    EXPECT_EQ(parser.execute(&third), fiber::http::ParseCode::Done);
 }
 
 TEST(Http1ParserTest, ChunkedBodyParserRejectsInvalidSizeLine) {

@@ -39,6 +39,17 @@ struct ReadBodyChunk {
     mem::IoBufChain data_chain;
 };
 
+enum class ResponseBodyMode : std::uint8_t {
+    Auto,
+    ContentLength,
+    Chunked,
+};
+
+enum class ResponseConnectionMode : std::uint8_t {
+    Auto,
+    Close,
+};
+
 class Http1Connection;
 class Http1ExchangeIo;
 class HttpExchangeIo;
@@ -59,7 +70,10 @@ public:
     std::string_view method_view() const noexcept { return method_view_; }
     std::string_view header(std::string_view name) const noexcept;
     const HttpHeaders &request_headers() const noexcept { return request_headers_; };
+    const HttpHeaders &request_trailers() const noexcept { return request_trailers_; };
+    bool request_trailers_complete() const noexcept { return request_trailers_complete_; }
     HttpHeaders &response_headers() noexcept { return response_headers_; };
+    HttpHeaders &response_trailers() noexcept { return response_trailers_; }
     mem::BufPool &pool() noexcept { return pool_; }
 
     fiber::async::Task<common::IoResult<ReadBodyChunk>> read_body(std::size_t max_bytes) noexcept;
@@ -69,8 +83,10 @@ public:
     void set_response_content_length(size_t len);
     void set_response_chunked();
     void set_response_close();
+    void set_response_trailer(std::string_view name, std::string_view value);
 
     fiber::async::Task<common::IoResult<void>> send_response_header(int status, std::string_view reason = {});
+    fiber::async::Task<common::IoResult<void>> finish_response() noexcept;
     fiber::async::Task<common::IoResult<size_t>> write_body(const uint8_t *buf, size_t len, bool end) noexcept;
 
 
@@ -84,17 +100,20 @@ private:
 
     fiber::mem::BufPool pool_;
     fiber::mem::IoBufChain header_bufs_;
+    fiber::mem::IoBufChain trailer_bufs_;
     HttpMethod method_{};
     HttpVersion version_{};
     HttpUri uri_;
     std::string_view method_view_;
     std::string_view version_view_;
     HttpHeaders request_headers_;
+    HttpHeaders request_trailers_;
+    bool request_trailers_complete_ = false;
 
     HttpHeaders response_headers_;
-    bool response_chunked_ = false;
-    bool response_close_ = false;
-    bool response_content_length_set_ = false;
+    HttpHeaders response_trailers_;
+    ResponseBodyMode response_body_mode_ = ResponseBodyMode::Auto;
+    ResponseConnectionMode response_connection_mode_ = ResponseConnectionMode::Auto;
     size_t response_content_length_ = 0;
     bool request_chunked_ = false;
     bool request_content_length_set_ = false;

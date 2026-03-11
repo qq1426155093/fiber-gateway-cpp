@@ -29,6 +29,7 @@ enum class ParseCode : int {
     InvalidHeader = -14,
     HeaderDone = -15,
     HeaderTooLarge = -16,
+    BodyDone = -17,
 };
 
 class RequestLineParser : public common::NonCopyable, public common::NonMovable {
@@ -194,6 +195,7 @@ public:
     [[nodiscard]] bool done() const noexcept { return done_; }
     [[nodiscard]] std::size_t remaining() const noexcept;
     void consume(std::size_t n) noexcept;
+    void finish_chunked_trailers() noexcept;
     ParseCode execute(mem::IoBuf *buffer) noexcept;
 
 private:

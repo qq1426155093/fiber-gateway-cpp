@@ -1016,7 +1016,9 @@ ParseCode ChunkedBodyParser::execute(mem::IoBuf *buffer) noexcept {
                             break;
                         case '\n':
                             state = State::Trailer;
-                            break;
+                            rc = ParseCode::BodyDone;
+                            ++pos;
+                            goto data;
                         case ';':
                         case ' ':
                         case '\t':
@@ -1095,7 +1097,9 @@ ParseCode ChunkedBodyParser::execute(mem::IoBuf *buffer) noexcept {
                         break;
                     case '\n':
                         state = State::Trailer;
-                        break;
+                        rc = ParseCode::BodyDone;
+                        ++pos;
+                        goto data;
                     default:
                         break;
                 }
@@ -1104,48 +1108,18 @@ ParseCode ChunkedBodyParser::execute(mem::IoBuf *buffer) noexcept {
             case State::LastChunkExtensionAlmostDone:
                 if (ch == '\n') {
                     state = State::Trailer;
-                    break;
+                    rc = ParseCode::BodyDone;
+                    ++pos;
+                    goto data;
                 }
                 goto invalid;
 
             case State::Trailer:
-                switch (ch) {
-                    case '\r':
-                        state = State::TrailerAlmostDone;
-                        break;
-                    case '\n':
-                        goto done;
-                    default:
-                        state = State::TrailerHeader;
-                        break;
-                }
-                break;
-
             case State::TrailerAlmostDone:
-                if (ch == '\n') {
-                    goto done;
-                }
-                goto invalid;
-
             case State::TrailerHeader:
-                switch (ch) {
-                    case '\r':
-                        state = State::TrailerHeaderAlmostDone;
-                        break;
-                    case '\n':
-                        state = State::Trailer;
-                        break;
-                    default:
-                        break;
-                }
-                break;
-
             case State::TrailerHeaderAlmostDone:
-                if (ch == '\n') {
-                    state = State::Trailer;
-                    break;
-                }
-                goto invalid;
+                rc = ParseCode::BodyDone;
+                goto data;
         }
     }
 
@@ -1181,11 +1155,9 @@ data:
             break;
         case State::Trailer:
         case State::TrailerAlmostDone:
-            length_ = 1;
-            break;
         case State::TrailerHeader:
         case State::TrailerHeaderAlmostDone:
-            length_ = 2;
+            length_ = 0;
             break;
     }
 
@@ -1253,6 +1225,14 @@ void BodyParser::consume(std::size_t n) noexcept {
             chunked_parser_.consume(n);
             return;
     }
+}
+
+void BodyParser::finish_chunked_trailers() noexcept {
+    if (type_ != Type::Chunked) {
+        return;
+    }
+    done_ = true;
+    chunked_parser_.reset();
 }
 
 ParseCode BodyParser::execute(mem::IoBuf *buffer) noexcept {

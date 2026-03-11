@@ -6,9 +6,15 @@
 
 namespace fiber::http {
 
-HttpExchange::HttpExchange(const HttpServerOptions &options) : request_headers_(pool_), response_headers_(pool_) {
+HttpExchange::HttpExchange(const HttpServerOptions &options) :
+    request_headers_(pool_),
+    request_trailers_(pool_),
+    response_headers_(pool_),
+    response_trailers_(pool_) {
     request_headers_.reserve_bytes(options.header_init_size);
+    request_trailers_.reserve_bytes(options.header_init_size);
     response_headers_.reserve_bytes(options.header_init_size);
+    response_trailers_.reserve_bytes(options.header_init_size);
 }
 
 HttpExchange::~HttpExchange() = default;
@@ -42,23 +48,30 @@ void HttpExchange::set_response_header(std::string_view name, std::string_view v
 }
 
 void HttpExchange::set_response_content_length(size_t len) {
-    response_content_length_set_ = true;
+    response_body_mode_ = ResponseBodyMode::ContentLength;
     response_content_length_ = len;
-    response_chunked_ = false;
 }
 
-void HttpExchange::set_response_chunked() {
-    response_chunked_ = true;
-    response_content_length_set_ = false;
-}
+void HttpExchange::set_response_chunked() { response_body_mode_ = ResponseBodyMode::Chunked; }
 
-void HttpExchange::set_response_close() { response_close_ = true; }
+void HttpExchange::set_response_close() { response_connection_mode_ = ResponseConnectionMode::Close; }
+
+void HttpExchange::set_response_trailer(std::string_view name, std::string_view value) {
+    response_trailers_.set(name, value);
+}
 
 fiber::async::Task<common::IoResult<void>> HttpExchange::send_response_header(int status, std::string_view reason) {
     if (!io_) {
         co_return std::unexpected(common::IoErr::Invalid);
     }
     co_return co_await io_->send_response_header(*this, status, reason);
+}
+
+fiber::async::Task<common::IoResult<void>> HttpExchange::finish_response() noexcept {
+    if (!io_) {
+        co_return std::unexpected(common::IoErr::Invalid);
+    }
+    co_return co_await io_->finish_response(*this);
 }
 
 fiber::async::Task<common::IoResult<size_t>> HttpExchange::write_body(const uint8_t *buf, size_t len,

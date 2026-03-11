@@ -21,6 +21,7 @@ public:
                                                                           size_t max_bytes) noexcept = 0;
     virtual fiber::async::Task<common::IoResult<void>> send_response_header(HttpExchange &exchange, int status,
                                                                             std::string_view reason) = 0;
+    virtual fiber::async::Task<common::IoResult<void>> finish_response(HttpExchange &exchange) noexcept = 0;
     virtual fiber::async::Task<common::IoResult<size_t>> write_body(HttpExchange &exchange, const uint8_t *buf,
                                                                     size_t len, bool end) noexcept = 0;
 };

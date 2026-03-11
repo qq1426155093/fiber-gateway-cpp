@@ -12,6 +12,13 @@ namespace fiber::http {
 class HttpExchange;
 class Http1Connection;
 
+enum class ResponsePhase : std::uint8_t {
+    Init,
+    HeaderSent,
+    BodyStreaming,
+    Finished,
+};
+
 class Http1ExchangeIo final : public HttpExchangeIo {
 public:
     Http1ExchangeIo(Http1Connection &connection, const HttpExchange &exchange);
@@ -20,23 +27,25 @@ public:
                                                                   size_t max_bytes) noexcept override;
     fiber::async::Task<common::IoResult<void>> send_response_header(HttpExchange &exchange, int status,
                                                                     std::string_view reason) override;
+    fiber::async::Task<common::IoResult<void>> finish_response(HttpExchange &exchange) noexcept override;
     fiber::async::Task<common::IoResult<size_t>> write_body(HttpExchange &exchange, const uint8_t *buf, size_t len,
                                                             bool end) noexcept override;
 
     [[nodiscard]] bool request_body_complete() const noexcept { return body_parser_.done(); }
-    [[nodiscard]] bool response_complete() const noexcept { return response_complete_; }
+    [[nodiscard]] bool response_complete() const noexcept { return response_phase_ == ResponsePhase::Finished; }
     [[nodiscard]] bool should_keep_alive(const HttpExchange &exchange) const noexcept;
 
 private:
     fiber::async::Task<common::IoResult<size_t>> read_more() noexcept;
     fiber::async::Task<common::IoResult<ParseCode>> advance_chunked_body() noexcept;
+    fiber::async::Task<common::IoResult<void>> read_request_trailers(HttpExchange &exchange) noexcept;
+    fiber::async::Task<common::IoResult<void>> write_chunked_trailer_block(HttpExchange &exchange) noexcept;
     common::IoResult<void> take_prefix(mem::IoBufChain &out, std::size_t len) noexcept;
 
     Http1Connection *connection_ = nullptr;
     BodyParser body_parser_;
 
-    bool response_header_sent_ = false;
-    bool response_complete_ = false;
+    ResponsePhase response_phase_ = ResponsePhase::Init;
     size_t response_body_sent_ = 0;
     bool close_after_response_ = false;
 };
