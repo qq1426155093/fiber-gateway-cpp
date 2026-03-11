@@ -152,6 +152,25 @@ TlsStreamFd::HandshakeAwaiter TlsStreamFd::handshake() noexcept { return Handsha
 
 TlsStreamFd::ShutdownAwaiter TlsStreamFd::shutdown() noexcept { return ShutdownAwaiter(*this); }
 
+StreamFd::WaitReadableAwaiter TlsStreamFd::wait_readable() noexcept { return stream_fd_.wait_readable(); }
+
+StreamFd::WaitWritableAwaiter TlsStreamFd::wait_writable() noexcept { return stream_fd_.wait_writable(); }
+
+fiber::common::IoErr TlsStreamFd::poll_handshake(fiber::event::IoEvent &event) noexcept {
+    return handshake_once(event);
+}
+
+fiber::common::IoErr TlsStreamFd::poll_shutdown(fiber::event::IoEvent &event) noexcept { return shutdown_once(event); }
+
+fiber::common::IoErr TlsStreamFd::poll_read(void *buf, size_t len, size_t &out, fiber::event::IoEvent &event) noexcept {
+    return read_once(buf, len, out, event);
+}
+
+fiber::common::IoErr TlsStreamFd::poll_write(const void *buf, size_t len, size_t &out,
+                                             fiber::event::IoEvent &event) noexcept {
+    return write_once(buf, len, out, event);
+}
+
 fiber::common::IoErr TlsStreamFd::handshake_once(fiber::event::IoEvent &event) noexcept {
     if (!stream_fd_.valid() || !ssl_) {
         return fiber::common::IoErr::BadFd;

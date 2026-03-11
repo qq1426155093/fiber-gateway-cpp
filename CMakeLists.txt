@@ -197,6 +197,7 @@ if(FIBER_BUILD_TESTS)
             tests/IpAddressTest.cpp
             tests/Http1ParserTest.cpp
             tests/Http1ServerTest.cpp
+            tests/TlsAlpnTest.cpp
         )
         target_link_libraries(fiber_tests PRIVATE fiber_lib GTest::gtest_main)
         fiber_link_runtime_allocator(fiber_tests)

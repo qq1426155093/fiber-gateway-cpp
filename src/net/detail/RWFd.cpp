@@ -101,14 +101,15 @@ void RWFd::handle_events(fiber::event::IoEvent events) {
             auto *waiter = local_read_waiter_;
             FIBER_ASSERT(waiter);
             local_read_waiter_ = nullptr;
+            local_read_waiting_ = false;
             waiter->coro_.resume();
         } else {
             auto *waiter = cross_read_waiter_;
             FIBER_ASSERT(waiter);
             cross_read_waiter_ = nullptr;
+            local_read_waiting_ = false;
             RWFdCrossThreadWaiter::do_notify_resume(waiter);
         }
-        local_read_waiting_ = false;
     }
 
     if (fiber::event::any(events & fiber::event::IoEvent::Write)) {
@@ -116,14 +117,15 @@ void RWFd::handle_events(fiber::event::IoEvent events) {
             auto *waiter = local_write_waiter_;
             FIBER_ASSERT(waiter);
             local_write_waiter_ = nullptr;
+            local_write_waiting_ = false;
             waiter->coro_.resume();
         } else {
             auto *waiter = cross_write_waiter_;
             FIBER_ASSERT(waiter);
             cross_write_waiter_ = nullptr;
+            local_write_waiting_ = false;
             RWFdCrossThreadWaiter::do_notify_resume(waiter);
         }
-        local_write_waiting_ = false;
     }
 }
 
@@ -157,8 +159,12 @@ void RWFdCrossThreadWaiter::cancel_wait() noexcept {
             case RWFdWaiterState::Watching_Event:
                 expected = RWFdWaiterState::Request_Cancel;
                 break;
+            case RWFdWaiterState::Request_Cancel:
+            case RWFdWaiterState::Waiting_Cancel:
+            case RWFdWaiterState::Canceled:
+                return;
             default:
-                FIBER_ASSERT(false);
+                return;
         }
         if (state_.compare_exchange_weak(state, expected, std::memory_order_acq_rel, std::memory_order_acquire)) {
             break;
@@ -184,8 +190,12 @@ void RWFdCrossThreadWaiter::do_notify_resume(RWFdCrossThreadWaiter *waiter) noex
             case RWFdWaiterState::Request_Cancel:
                 expected = RWFdWaiterState::Waiting_Cancel;
                 break;
+            case RWFdWaiterState::Notify_Resume:
+            case RWFdWaiterState::Waiting_Cancel:
+            case RWFdWaiterState::Canceled:
+                return;
             default:
-                FIBER_ASSERT(false);
+                return;
         }
         if (waiter->state_.compare_exchange_weak(state, expected, std::memory_order_acq_rel,
                                                  std::memory_order_acquire)) {

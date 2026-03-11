@@ -37,4 +37,26 @@ TlsTcpStream::HandshakeAwaiter TlsTcpStream::handshake() noexcept { return strea
 
 TlsTcpStream::ShutdownAwaiter TlsTcpStream::shutdown() noexcept { return stream_.shutdown(); }
 
+detail::StreamFd::WaitReadableAwaiter TlsTcpStream::wait_readable() noexcept { return stream_.wait_readable(); }
+
+detail::StreamFd::WaitWritableAwaiter TlsTcpStream::wait_writable() noexcept { return stream_.wait_writable(); }
+
+fiber::common::IoErr TlsTcpStream::poll_handshake(fiber::event::IoEvent &event) noexcept {
+    return stream_.poll_handshake(event);
+}
+
+fiber::common::IoErr TlsTcpStream::poll_shutdown(fiber::event::IoEvent &event) noexcept {
+    return stream_.poll_shutdown(event);
+}
+
+fiber::common::IoErr TlsTcpStream::poll_read(void *buf, size_t len, size_t &out,
+                                             fiber::event::IoEvent &event) noexcept {
+    return stream_.poll_read(buf, len, out, event);
+}
+
+fiber::common::IoErr TlsTcpStream::poll_write(const void *buf, size_t len, size_t &out,
+                                              fiber::event::IoEvent &event) noexcept {
+    return stream_.poll_write(buf, len, out, event);
+}
+
 } // namespace fiber::net

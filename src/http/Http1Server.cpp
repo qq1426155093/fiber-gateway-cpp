@@ -7,6 +7,7 @@
 #include "../net/TcpStream.h"
 #include "Http1Connection.h"
 #include "HttpTransport.h"
+#include "TlsAlpn.h"
 
 namespace fiber::http {
 
@@ -20,6 +21,7 @@ fiber::common::IoResult<void> Http1Server::bind(const net::SocketAddress &addr, 
         return std::unexpected(result.error());
     }
     if (options_.tls.enabled) {
+        normalize_http1_alpn(options_.tls);
         auto ctx = std::make_unique<TlsContext>(options_.tls, true);
         auto init_result = ctx->init();
         if (!init_result) {

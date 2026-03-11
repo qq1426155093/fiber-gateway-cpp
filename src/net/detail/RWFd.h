@@ -141,11 +141,15 @@ private:
         FIBER_ASSERT(waiter);
         if constexpr (std::is_same_v<std::remove_cvref_t<Waiter>, RWFdLocalThreadWaiter>) {
             auto *&slot = local_waiter_slot<Event>();
-            FIBER_ASSERT(slot == waiter);
+            if (slot != waiter) {
+                return fiber::common::IoErr::None;
+            }
             slot = nullptr;
         } else {
             auto *&slot = cross_waiter_slot<Event>();
-            FIBER_ASSERT(slot == waiter);
+            if (slot != waiter) {
+                return fiber::common::IoErr::None;
+            }
             slot = nullptr;
         }
         local_waiting_slot<Event>() = false;

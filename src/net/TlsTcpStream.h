@@ -9,6 +9,7 @@
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
 #include "../event/EventLoop.h"
+#include "../event/Poller.h"
 #include "SocketAddress.h"
 #include "detail/TlsStreamFd.h"
 
@@ -42,6 +43,12 @@ public:
     [[nodiscard]] fiber::common::IoResult<size_t> try_write(const void *buf, size_t len) noexcept;
     [[nodiscard]] HandshakeAwaiter handshake() noexcept;
     [[nodiscard]] ShutdownAwaiter shutdown() noexcept;
+    [[nodiscard]] detail::StreamFd::WaitReadableAwaiter wait_readable() noexcept;
+    [[nodiscard]] detail::StreamFd::WaitWritableAwaiter wait_writable() noexcept;
+    fiber::common::IoErr poll_handshake(fiber::event::IoEvent &event) noexcept;
+    fiber::common::IoErr poll_shutdown(fiber::event::IoEvent &event) noexcept;
+    fiber::common::IoErr poll_read(void *buf, size_t len, size_t &out, fiber::event::IoEvent &event) noexcept;
+    fiber::common::IoErr poll_write(const void *buf, size_t len, size_t &out, fiber::event::IoEvent &event) noexcept;
 
 private:
     detail::TlsStreamFd stream_;

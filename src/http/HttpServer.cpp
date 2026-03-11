@@ -9,30 +9,9 @@
 #include "../net/TcpStream.h"
 #include "Http1Connection.h"
 #include "HttpTransport.h"
+#include "TlsAlpn.h"
 
 namespace fiber::http {
-
-namespace {
-
-void normalize_http1_alpn(TlsOptions &options) {
-    std::vector<std::string> normalized;
-    normalized.reserve(options.alpn.size() + 1);
-
-    for (const auto &proto: options.alpn) {
-        if (proto.empty() || proto == "h2") {
-            continue;
-        }
-        if (proto == "http/1.1") {
-            continue;
-        }
-        normalized.push_back(proto);
-    }
-
-    normalized.insert(normalized.begin(), "http/1.1");
-    options.alpn = std::move(normalized);
-}
-
-} // namespace
 
 HttpServer::HttpServer(event::EventLoop &loop, HttpHandler handler, HttpServerOptions options) :
     loop_(loop), handler_(std::move(handler)), options_(std::move(options)), listener_(loop) {}

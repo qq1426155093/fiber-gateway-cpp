@@ -12,6 +12,39 @@ namespace {
 
 constexpr int kMaxIov = 16;
 
+common::IoResult<std::chrono::milliseconds> remaining_timeout(event::EventLoop &loop,
+                                                              std::chrono::steady_clock::time_point deadline) {
+    auto now = loop.now();
+    if (deadline <= now) {
+        return std::unexpected(common::IoErr::TimedOut);
+    }
+    auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+    if (remaining <= std::chrono::milliseconds::zero()) {
+        remaining = std::chrono::milliseconds(1);
+    }
+    return remaining;
+}
+
+fiber::async::Task<common::IoResult<void>> wait_tls_event(net::TlsTcpStream &stream, event::IoEvent io_event,
+                                                          std::chrono::steady_clock::time_point deadline) {
+    auto timeout_result = remaining_timeout(stream.loop(), deadline);
+    if (!timeout_result) {
+        co_return std::unexpected(timeout_result.error());
+    }
+    common::IoResult<void> wait_result;
+    if (io_event == event::IoEvent::Read) {
+        wait_result = co_await fiber::async::timeout_for([&]() { return stream.wait_readable(); }, *timeout_result);
+    } else if (io_event == event::IoEvent::Write) {
+        wait_result = co_await fiber::async::timeout_for([&]() { return stream.wait_writable(); }, *timeout_result);
+    } else {
+        co_return std::unexpected(common::IoErr::Invalid);
+    }
+    if (!wait_result) {
+        co_return std::unexpected(wait_result.error());
+    }
+    co_return common::IoResult<void>{};
+}
+
 } // namespace
 
 common::IoResult<std::unique_ptr<TcpTransport>> TcpTransport::create(event::EventLoop &loop,
@@ -151,13 +184,39 @@ common::IoResult<void> TlsTransport::init() {
 }
 
 fiber::async::Task<common::IoResult<void>> TlsTransport::handshake(std::chrono::milliseconds timeout) {
-    auto result = co_await fiber::async::timeout_for([&]() { return stream_.handshake(); }, timeout);
-    co_return result;
+    auto deadline = stream_.loop().now() + timeout;
+    for (;;) {
+        event::IoEvent wait_event = event::IoEvent::None;
+        common::IoErr err = stream_.poll_handshake(wait_event);
+        if (err == common::IoErr::None) {
+            co_return common::IoResult<void>{};
+        }
+        if (err != common::IoErr::WouldBlock) {
+            co_return std::unexpected(err);
+        }
+        auto wait_result = co_await wait_tls_event(stream_, wait_event, deadline);
+        if (!wait_result) {
+            co_return std::unexpected(wait_result.error());
+        }
+    }
 }
 
 fiber::async::Task<common::IoResult<void>> TlsTransport::shutdown(std::chrono::milliseconds timeout) {
-    auto result = co_await fiber::async::timeout_for([&]() { return stream_.shutdown(); }, timeout);
-    co_return result;
+    auto deadline = stream_.loop().now() + timeout;
+    for (;;) {
+        event::IoEvent wait_event = event::IoEvent::None;
+        common::IoErr err = stream_.poll_shutdown(wait_event);
+        if (err == common::IoErr::None) {
+            co_return common::IoResult<void>{};
+        }
+        if (err != common::IoErr::WouldBlock) {
+            co_return std::unexpected(err);
+        }
+        auto wait_result = co_await wait_tls_event(stream_, wait_event, deadline);
+        if (!wait_result) {
+            co_return std::unexpected(wait_result.error());
+        }
+    }
 }
 
 fiber::async::Task<common::IoResult<size_t>> TlsTransport::read(void *buf, size_t len,
@@ -166,11 +225,22 @@ fiber::async::Task<common::IoResult<size_t>> TlsTransport::read(void *buf, size_
     if (!hs_result) {
         co_return std::unexpected(hs_result.error());
     }
-    auto result = co_await fiber::async::timeout_for([&]() { return stream_.read(buf, len); }, timeout);
-    if (!result) {
-        co_return std::unexpected(result.error());
+    auto deadline = stream_.loop().now() + timeout;
+    for (;;) {
+        size_t out = 0;
+        event::IoEvent wait_event = event::IoEvent::None;
+        common::IoErr err = stream_.poll_read(buf, len, out, wait_event);
+        if (err == common::IoErr::None) {
+            co_return out;
+        }
+        if (err != common::IoErr::WouldBlock) {
+            co_return std::unexpected(err);
+        }
+        auto wait_result = co_await wait_tls_event(stream_, wait_event, deadline);
+        if (!wait_result) {
+            co_return std::unexpected(wait_result.error());
+        }
     }
-    co_return *result;
 }
 
 fiber::async::Task<common::IoResult<size_t>> TlsTransport::read_into(mem::IoBuf &buf,
@@ -183,13 +253,23 @@ fiber::async::Task<common::IoResult<size_t>> TlsTransport::read_into(mem::IoBuf 
     if (!hs_result) {
         co_return std::unexpected(hs_result.error());
     }
-    auto result =
-            co_await fiber::async::timeout_for([&]() { return stream_.read(buf.writable_data(), writable); }, timeout);
-    if (!result) {
-        co_return std::unexpected(result.error());
+    auto deadline = stream_.loop().now() + timeout;
+    for (;;) {
+        size_t out = 0;
+        event::IoEvent wait_event = event::IoEvent::None;
+        common::IoErr err = stream_.poll_read(buf.writable_data(), writable, out, wait_event);
+        if (err == common::IoErr::None) {
+            buf.commit(out);
+            co_return out;
+        }
+        if (err != common::IoErr::WouldBlock) {
+            co_return std::unexpected(err);
+        }
+        auto wait_result = co_await wait_tls_event(stream_, wait_event, deadline);
+        if (!wait_result) {
+            co_return std::unexpected(wait_result.error());
+        }
     }
-    buf.commit(*result);
-    co_return *result;
 }
 
 fiber::async::Task<common::IoResult<size_t>> TlsTransport::readv_into(mem::IoBufChain &bufs,
@@ -207,11 +287,22 @@ fiber::async::Task<common::IoResult<size_t>> TlsTransport::write(const void *buf
     if (!hs_result) {
         co_return std::unexpected(hs_result.error());
     }
-    auto result = co_await fiber::async::timeout_for([&]() { return stream_.write(buf, len); }, timeout);
-    if (!result) {
-        co_return std::unexpected(result.error());
+    auto deadline = stream_.loop().now() + timeout;
+    for (;;) {
+        size_t out = 0;
+        event::IoEvent wait_event = event::IoEvent::None;
+        common::IoErr err = stream_.poll_write(buf, len, out, wait_event);
+        if (err == common::IoErr::None) {
+            co_return out;
+        }
+        if (err != common::IoErr::WouldBlock) {
+            co_return std::unexpected(err);
+        }
+        auto wait_result = co_await wait_tls_event(stream_, wait_event, deadline);
+        if (!wait_result) {
+            co_return std::unexpected(wait_result.error());
+        }
     }
-    co_return *result;
 }
 
 fiber::async::Task<common::IoResult<size_t>> TlsTransport::write(mem::IoBuf &buf, std::chrono::milliseconds timeout) {
@@ -223,13 +314,23 @@ fiber::async::Task<common::IoResult<size_t>> TlsTransport::write(mem::IoBuf &buf
     if (!hs_result) {
         co_return std::unexpected(hs_result.error());
     }
-    auto result =
-            co_await fiber::async::timeout_for([&]() { return stream_.write(buf.readable_data(), readable); }, timeout);
-    if (!result) {
-        co_return std::unexpected(result.error());
+    auto deadline = stream_.loop().now() + timeout;
+    for (;;) {
+        size_t out = 0;
+        event::IoEvent wait_event = event::IoEvent::None;
+        common::IoErr err = stream_.poll_write(buf.readable_data(), readable, out, wait_event);
+        if (err == common::IoErr::None) {
+            buf.consume(out);
+            co_return out;
+        }
+        if (err != common::IoErr::WouldBlock) {
+            co_return std::unexpected(err);
+        }
+        auto wait_result = co_await wait_tls_event(stream_, wait_event, deadline);
+        if (!wait_result) {
+            co_return std::unexpected(wait_result.error());
+        }
     }
-    buf.consume(*result);
-    co_return *result;
 }
 
 fiber::async::Task<common::IoResult<size_t>> TlsTransport::writev(mem::IoBufChain &buf,
