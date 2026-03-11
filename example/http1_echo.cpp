@@ -47,8 +47,9 @@ fiber::async::Task<void> handle_echo(fiber::http::HttpExchange &exchange) {
         auto read_result = co_await exchange.read_body(4096);
         if (!read_result) {
             exchange.set_response_close();
+            exchange.set_response_status(400);
             exchange.set_response_content_length(0);
-            co_await exchange.send_response_header(400, "Bad Request");
+            co_await exchange.send_response_header();
             co_return;
         }
         while (auto *chunk = read_result->data_chain.front()) {
@@ -66,8 +67,9 @@ fiber::async::Task<void> handle_echo(fiber::http::HttpExchange &exchange) {
     }
 
     exchange.set_response_header("Content-Type", "text/plain");
+    exchange.set_response_status(200);
     exchange.set_response_content_length(body.size());
-    auto header_result = co_await exchange.send_response_header(200);
+    auto header_result = co_await exchange.send_response_header();
     if (!header_result) {
         co_return;
     }

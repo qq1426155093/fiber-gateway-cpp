@@ -17,6 +17,88 @@ namespace fiber::http {
 namespace {
 
 constexpr std::size_t kMaxDirectBodyRead = 64 * 1024;
+constexpr std::size_t kInlineFirstWriteBodyLimit = 128;
+
+std::string_view default_reason_phrase(int status) noexcept {
+    switch (status) {
+        case 100:
+            return "Continue";
+        case 101:
+            return "Switching Protocols";
+        case 200:
+            return "OK";
+        case 201:
+            return "Created";
+        case 202:
+            return "Accepted";
+        case 204:
+            return "No Content";
+        case 301:
+            return "Moved Permanently";
+        case 302:
+            return "Found";
+        case 304:
+            return "Not Modified";
+        case 400:
+            return "Bad Request";
+        case 401:
+            return "Unauthorized";
+        case 403:
+            return "Forbidden";
+        case 404:
+            return "Not Found";
+        case 405:
+            return "Method Not Allowed";
+        case 408:
+            return "Request Timeout";
+        case 409:
+            return "Conflict";
+        case 413:
+            return "Payload Too Large";
+        case 429:
+            return "Too Many Requests";
+        case 500:
+            return "Internal Server Error";
+        case 501:
+            return "Not Implemented";
+        case 502:
+            return "Bad Gateway";
+        case 503:
+            return "Service Unavailable";
+        case 504:
+            return "Gateway Timeout";
+        default:
+            return "OK";
+    }
+}
+
+std::size_t decimal_length(std::uint64_t value) noexcept {
+    std::array<char, 32> buffer{};
+    auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
+    return ec == std::errc() ? static_cast<std::size_t>(ptr - buffer.data()) : 0;
+}
+
+std::size_t append_decimal(char *dst, std::uint64_t value) noexcept {
+    std::array<char, 32> buffer{};
+    auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
+    if (ec != std::errc()) {
+        return 0;
+    }
+    std::size_t len = static_cast<std::size_t>(ptr - buffer.data());
+    std::memcpy(dst, buffer.data(), len);
+    return len;
+}
+
+std::size_t append_hex(char *dst, std::size_t value) noexcept {
+    std::array<char, 32> buffer{};
+    auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value, 16);
+    if (ec != std::errc()) {
+        return 0;
+    }
+    std::size_t len = static_cast<std::size_t>(ptr - buffer.data());
+    std::memcpy(dst, buffer.data(), len);
+    return len;
+}
 
 fiber::async::Task<common::IoResult<void>> write_all(HttpTransport *transport, const void *buf, size_t len,
                                                      std::chrono::milliseconds timeout) {
@@ -463,13 +545,149 @@ fiber::async::Task<common::IoResult<void>> Http1ExchangeIo::read_request_trailer
     }
 }
 
-fiber::async::Task<common::IoResult<void>> Http1ExchangeIo::send_response_header(HttpExchange &exchange, int status,
-                                                                                 std::string_view reason) {
+common::IoResult<mem::IoBuf> Http1ExchangeIo::build_response_header(HttpExchange &exchange, bool body_end,
+                                                                    std::size_t first_body_len,
+                                                                    bool infer_body_mode,
+                                                                    bool &close_conn) noexcept {
+    if (infer_body_mode && exchange.response_body_mode_ == ResponseBodyMode::Auto) {
+        if (body_end) {
+            exchange.response_body_mode_ = ResponseBodyMode::ContentLength;
+            exchange.response_content_length_ = first_body_len;
+        } else {
+            exchange.response_body_mode_ = ResponseBodyMode::Chunked;
+        }
+    }
+
+    if (exchange.response_body_mode_ == ResponseBodyMode::Auto) {
+        exchange.response_body_mode_ = ResponseBodyMode::ContentLength;
+        exchange.response_content_length_ = 0;
+    }
+
+    close_conn = exchange.response_connection_mode_ == ResponseConnectionMode::Close || connection_->stopping();
+    if (!close_conn) {
+        if (!connection_->options().drain_unread_body && !body_parser_.done()) {
+            close_conn = true;
+        } else if (exchange.version_ == HttpVersion::HTTP_1_0) {
+            close_conn = !exchange.request_keep_alive_;
+        } else {
+            close_conn = exchange.request_close_;
+        }
+    }
+
+    std::string_view reason = exchange.response_reason_.empty() ? default_reason_phrase(exchange.response_status_code_)
+                                                                : std::string_view(exchange.response_reason_);
+    constexpr std::string_view kHttp10 = "HTTP/1.0 ";
+    constexpr std::string_view kHttp11 = "HTTP/1.1 ";
+    constexpr std::string_view kCrLf = "\r\n";
+    constexpr std::string_view kContentLength = "Content-Length: ";
+    constexpr std::string_view kTransferEncoding = "Transfer-Encoding: chunked\r\n";
+    constexpr std::string_view kConnectionClose = "Connection: close\r\n";
+    std::string_view version = exchange.version_ == HttpVersion::HTTP_1_0 ? kHttp10 : kHttp11;
+
+    bool write_content_length = exchange.response_body_mode_ == ResponseBodyMode::ContentLength &&
+                                !exchange.response_headers_.contains("Content-Length");
+    bool write_transfer_encoding = exchange.response_body_mode_ == ResponseBodyMode::Chunked &&
+                                   !exchange.response_headers_.contains("Transfer-Encoding");
+    bool write_connection_close = close_conn && !exchange.response_headers_.contains("Connection");
+
+    std::size_t header_len = version.size();
+    header_len += decimal_length(static_cast<std::uint64_t>(exchange.response_status_code_));
+    header_len += 1 + reason.size() + kCrLf.size();
+    if (write_content_length) {
+        header_len += kContentLength.size();
+        header_len += decimal_length(exchange.response_content_length_);
+        header_len += kCrLf.size();
+    }
+    if (write_transfer_encoding) {
+        header_len += kTransferEncoding.size();
+    }
+    if (write_connection_close) {
+        header_len += kConnectionClose.size();
+    }
+    for (auto it = exchange.response_headers_.begin(); it != exchange.response_headers_.end(); ++it) {
+        const auto &field = *it;
+        if (field.name_len == 0) {
+            continue;
+        }
+        header_len += static_cast<std::size_t>(field.name_len) + 2 + static_cast<std::size_t>(field.value_len) +
+                      kCrLf.size();
+    }
+    header_len += kCrLf.size();
+
+    mem::IoBuf header = mem::IoBuf::allocate(header_len);
+    if (!header) {
+        return std::unexpected(common::IoErr::NoMem);
+    }
+
+    char *out = reinterpret_cast<char *>(header.writable_data());
+    std::memcpy(out, version.data(), version.size());
+    out += version.size();
+    out += append_decimal(out, static_cast<std::uint64_t>(exchange.response_status_code_));
+    *out++ = ' ';
+    std::memcpy(out, reason.data(), reason.size());
+    out += reason.size();
+    std::memcpy(out, kCrLf.data(), kCrLf.size());
+    out += kCrLf.size();
+
+    if (write_content_length) {
+        std::memcpy(out, kContentLength.data(), kContentLength.size());
+        out += kContentLength.size();
+        out += append_decimal(out, exchange.response_content_length_);
+        std::memcpy(out, kCrLf.data(), kCrLf.size());
+        out += kCrLf.size();
+    }
+    if (write_transfer_encoding) {
+        std::memcpy(out, kTransferEncoding.data(), kTransferEncoding.size());
+        out += kTransferEncoding.size();
+    }
+    if (write_connection_close) {
+        std::memcpy(out, kConnectionClose.data(), kConnectionClose.size());
+        out += kConnectionClose.size();
+    }
+
+    for (auto it = exchange.response_headers_.begin(); it != exchange.response_headers_.end(); ++it) {
+        const auto &field = *it;
+        if (field.name_len == 0) {
+            continue;
+        }
+        std::memcpy(out, field.name, field.name_len);
+        out += field.name_len;
+        *out++ = ':';
+        *out++ = ' ';
+        std::memcpy(out, field.value, field.value_len);
+        out += field.value_len;
+        std::memcpy(out, kCrLf.data(), kCrLf.size());
+        out += kCrLf.size();
+    }
+    std::memcpy(out, kCrLf.data(), kCrLf.size());
+    out += kCrLf.size();
+    header.commit(static_cast<std::size_t>(out - reinterpret_cast<char *>(header.writable_data())));
+
+    return header;
+}
+
+fiber::async::Task<common::IoResult<void>> Http1ExchangeIo::write_response_header(HttpExchange &exchange, bool body_end,
+                                                                                  std::size_t first_body_len,
+                                                                                  bool infer_body_mode) noexcept {
     if (!connection_) {
         co_return std::unexpected(common::IoErr::Invalid);
     }
     if (response_phase_ != ResponsePhase::Init) {
         co_return std::unexpected(common::IoErr::Already);
+    }
+
+    if (infer_body_mode && exchange.response_body_mode_ == ResponseBodyMode::Auto) {
+        if (body_end) {
+            exchange.response_body_mode_ = ResponseBodyMode::ContentLength;
+            exchange.response_content_length_ = first_body_len;
+        } else {
+            exchange.response_body_mode_ = ResponseBodyMode::Chunked;
+        }
+    }
+
+    if (exchange.response_body_mode_ == ResponseBodyMode::Auto) {
+        exchange.response_body_mode_ = ResponseBodyMode::ContentLength;
+        exchange.response_content_length_ = 0;
     }
 
     bool close_conn = exchange.response_connection_mode_ == ResponseConnectionMode::Close || connection_->stopping();
@@ -483,11 +701,8 @@ fiber::async::Task<common::IoResult<void>> Http1ExchangeIo::send_response_header
         }
     }
 
-    if (exchange.response_body_mode_ == ResponseBodyMode::Auto) {
-        exchange.response_body_mode_ = ResponseBodyMode::ContentLength;
-        exchange.response_content_length_ = 0;
-    }
-
+    std::string_view reason = exchange.response_reason_.empty() ? default_reason_phrase(exchange.response_status_code_)
+                                                                : std::string_view(exchange.response_reason_);
     std::string header;
     header.reserve(128 + exchange.response_headers_.size() * 32);
     if (exchange.version_ == HttpVersion::HTTP_1_0) {
@@ -495,9 +710,9 @@ fiber::async::Task<common::IoResult<void>> Http1ExchangeIo::send_response_header
     } else {
         header.append("HTTP/1.1 ");
     }
-    header.append(std::to_string(status));
+    header.append(std::to_string(exchange.response_status_code_));
     header.push_back(' ');
-    header.append(reason.empty() ? "OK" : reason);
+    header.append(reason);
     header.append("\r\n");
 
     if (exchange.response_body_mode_ == ResponseBodyMode::ContentLength &&
@@ -537,6 +752,10 @@ fiber::async::Task<common::IoResult<void>> Http1ExchangeIo::send_response_header
         exchange.response_connection_mode_ = ResponseConnectionMode::Close;
     }
     co_return common::IoResult<void>{};
+}
+
+fiber::async::Task<common::IoResult<void>> Http1ExchangeIo::send_response_header(HttpExchange &exchange) {
+    co_return co_await write_response_header(exchange, true, 0, false);
 }
 
 fiber::async::Task<common::IoResult<void>> Http1ExchangeIo::write_chunked_trailer_block(HttpExchange &exchange) noexcept {
@@ -604,14 +823,79 @@ fiber::async::Task<common::IoResult<size_t>> Http1ExchangeIo::write_body(HttpExc
     if (!connection_) {
         co_return std::unexpected(common::IoErr::Invalid);
     }
-    if (response_phase_ == ResponsePhase::Init) {
-        co_return std::unexpected(common::IoErr::Invalid);
-    }
     if (response_phase_ == ResponsePhase::Finished) {
         co_return std::unexpected(common::IoErr::Already);
     }
 
     size_t len = chunk.data_chain.readable_bytes();
+    if (response_phase_ == ResponsePhase::Init) {
+        bool close_conn = false;
+        auto header_result = build_response_header(exchange, chunk.last, len, true, close_conn);
+        if (!header_result) {
+            co_return std::unexpected(header_result.error());
+        }
+
+        if (exchange.response_body_mode_ == ResponseBodyMode::ContentLength) {
+            size_t remaining = exchange.response_content_length_ - response_body_sent_;
+            if (len > remaining) {
+                co_return std::unexpected(common::IoErr::Invalid);
+            }
+        }
+
+        if (exchange.response_body_mode_ == ResponseBodyMode::Chunked && len > 0) {
+            std::size_t prefix_len = decimal_length(0);
+            {
+                std::array<char, 32> buffer{};
+                prefix_len = append_hex(buffer.data(), len);
+            }
+
+            mem::IoBuf prefix = mem::IoBuf::allocate(prefix_len + 2);
+            if (!prefix) {
+                co_return std::unexpected(common::IoErr::NoMem);
+            }
+            char *prefix_out = reinterpret_cast<char *>(prefix.writable_data());
+            prefix_out += append_hex(prefix_out, len);
+            *prefix_out++ = '\r';
+            *prefix_out++ = '\n';
+            prefix.commit(static_cast<std::size_t>(prefix_out - reinterpret_cast<char *>(prefix.writable_data())));
+
+            mem::IoBuf suffix = mem::IoBuf::allocate(2);
+            if (!suffix) {
+                co_return std::unexpected(common::IoErr::NoMem);
+            }
+            char *suffix_out = reinterpret_cast<char *>(suffix.writable_data());
+            *suffix_out++ = '\r';
+            *suffix_out++ = '\n';
+            suffix.commit(2);
+
+            if (!chunk.data_chain.append(std::move(suffix)) || !chunk.data_chain.prepend(std::move(prefix))) {
+                co_return std::unexpected(common::IoErr::NoMem);
+            }
+        }
+        if (!chunk.data_chain.prepend(std::move(*header_result))) {
+            co_return std::unexpected(common::IoErr::NoMem);
+        }
+
+        auto res = co_await write_all(&connection_->transport(), chunk.data_chain, connection_->options().write_timeout);
+        if (!res) {
+            co_return std::unexpected(res.error());
+        }
+
+        close_after_response_ = close_conn;
+        if (close_conn) {
+            exchange.response_connection_mode_ = ResponseConnectionMode::Close;
+        }
+        response_body_sent_ += len;
+        response_phase_ = len > 0 ? ResponsePhase::BodyStreaming : ResponsePhase::HeaderSent;
+        if (chunk.last) {
+            auto finish_result = co_await finish_response(exchange);
+            if (!finish_result) {
+                co_return std::unexpected(finish_result.error());
+            }
+        }
+        co_return len;
+    }
+
     if (exchange.response_body_mode_ == ResponseBodyMode::Chunked) {
         if (len > 0) {
             std::array<char, 32> size_buf{};
@@ -684,11 +968,106 @@ fiber::async::Task<common::IoResult<size_t>> Http1ExchangeIo::write_body(HttpExc
     if (!connection_) {
         co_return std::unexpected(common::IoErr::Invalid);
     }
-    if (response_phase_ == ResponsePhase::Init) {
-        co_return std::unexpected(common::IoErr::Invalid);
-    }
     if (response_phase_ == ResponsePhase::Finished) {
         co_return std::unexpected(common::IoErr::Already);
+    }
+
+    if (response_phase_ == ResponsePhase::Init) {
+        bool close_conn = false;
+        auto header_result = build_response_header(exchange, end, len, true, close_conn);
+        if (!header_result) {
+            co_return std::unexpected(header_result.error());
+        }
+
+        if (exchange.response_body_mode_ == ResponseBodyMode::ContentLength) {
+            size_t remaining = exchange.response_content_length_ - response_body_sent_;
+            if (len > remaining) {
+                co_return std::unexpected(common::IoErr::Invalid);
+            }
+        }
+
+        if (len <= kInlineFirstWriteBodyLimit) {
+            std::size_t combined_len = header_result->readable() + len;
+            if (exchange.response_body_mode_ == ResponseBodyMode::Chunked && len > 0) {
+                combined_len += 32 + 4;
+            }
+
+            mem::IoBuf combined = mem::IoBuf::allocate(combined_len);
+            if (!combined) {
+                co_return std::unexpected(common::IoErr::NoMem);
+            }
+
+            char *out = reinterpret_cast<char *>(combined.writable_data());
+            std::memcpy(out, header_result->readable_data(), header_result->readable());
+            out += header_result->readable();
+
+            if (exchange.response_body_mode_ == ResponseBodyMode::Chunked && len > 0) {
+                out += append_hex(out, len);
+                *out++ = '\r';
+                *out++ = '\n';
+                std::memcpy(out, buf, len);
+                out += len;
+                *out++ = '\r';
+                *out++ = '\n';
+            } else if (len > 0) {
+                std::memcpy(out, buf, len);
+                out += len;
+            }
+
+            combined.commit(static_cast<std::size_t>(out - reinterpret_cast<char *>(combined.writable_data())));
+            auto res = co_await write_all(&connection_->transport(), combined.readable_data(), combined.readable(),
+                                          connection_->options().write_timeout);
+            if (!res) {
+                co_return std::unexpected(res.error());
+            }
+        } else {
+            auto res = co_await write_all(&connection_->transport(), header_result->readable_data(),
+                                          header_result->readable(), connection_->options().write_timeout);
+            if (!res) {
+                co_return std::unexpected(res.error());
+            }
+
+            if (exchange.response_body_mode_ == ResponseBodyMode::Chunked && len > 0) {
+                std::array<char, 32> size_buf{};
+                std::size_t size_len = append_hex(size_buf.data(), len);
+                res = co_await write_all(&connection_->transport(), size_buf.data(), size_len,
+                                         connection_->options().write_timeout);
+                if (!res) {
+                    co_return std::unexpected(res.error());
+                }
+                res = co_await write_all(&connection_->transport(), "\r\n", 2, connection_->options().write_timeout);
+                if (!res) {
+                    co_return std::unexpected(res.error());
+                }
+                res = co_await write_all(&connection_->transport(), buf, len, connection_->options().write_timeout);
+                if (!res) {
+                    co_return std::unexpected(res.error());
+                }
+                res = co_await write_all(&connection_->transport(), "\r\n", 2, connection_->options().write_timeout);
+                if (!res) {
+                    co_return std::unexpected(res.error());
+                }
+            } else if (len > 0) {
+                res = co_await write_all(&connection_->transport(), buf, len, connection_->options().write_timeout);
+                if (!res) {
+                    co_return std::unexpected(res.error());
+                }
+            }
+        }
+
+        close_after_response_ = close_conn;
+        if (close_conn) {
+            exchange.response_connection_mode_ = ResponseConnectionMode::Close;
+        }
+        response_body_sent_ += len;
+        response_phase_ = len > 0 ? ResponsePhase::BodyStreaming : ResponsePhase::HeaderSent;
+        if (end) {
+            auto finish_result = co_await finish_response(exchange);
+            if (!finish_result) {
+                co_return std::unexpected(finish_result.error());
+            }
+        }
+        co_return len;
     }
 
     if (exchange.response_body_mode_ == ResponseBodyMode::Chunked) {

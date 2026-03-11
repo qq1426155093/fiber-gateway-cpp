@@ -25,8 +25,7 @@ public:
 
     fiber::async::Task<common::IoResult<BodyChunk>> read_body(HttpExchange &exchange,
                                                               size_t max_bytes) noexcept override;
-    fiber::async::Task<common::IoResult<void>> send_response_header(HttpExchange &exchange, int status,
-                                                                    std::string_view reason) override;
+    fiber::async::Task<common::IoResult<void>> send_response_header(HttpExchange &exchange) override;
     fiber::async::Task<common::IoResult<void>> finish_response(HttpExchange &exchange) noexcept override;
     fiber::async::Task<common::IoResult<size_t>> write_body(HttpExchange &exchange, BodyChunk chunk) noexcept override;
     fiber::async::Task<common::IoResult<size_t>> write_body(HttpExchange &exchange, const uint8_t *buf, size_t len,
@@ -42,6 +41,12 @@ private:
                                                                          bool allow_read) noexcept;
     fiber::async::Task<common::IoResult<void>> read_request_trailers(HttpExchange &exchange) noexcept;
     fiber::async::Task<common::IoResult<void>> write_chunked_trailer_block(HttpExchange &exchange) noexcept;
+    common::IoResult<mem::IoBuf> build_response_header(HttpExchange &exchange, bool body_end,
+                                                       std::size_t first_body_len, bool infer_body_mode,
+                                                       bool &close_conn) noexcept;
+    fiber::async::Task<common::IoResult<void>> write_response_header(HttpExchange &exchange, bool body_end,
+                                                                     std::size_t first_body_len,
+                                                                     bool infer_body_mode) noexcept;
     common::IoResult<void> ensure_read_buf_writable(std::size_t min_writable) noexcept;
     std::size_t drain_body_input(mem::IoBuf &buffer) noexcept;
     common::IoResult<void> take_prefix(mem::IoBufChain &out, std::size_t len) noexcept;

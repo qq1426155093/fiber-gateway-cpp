@@ -140,8 +140,9 @@ fiber::common::IoResult<std::uint16_t> resolve_port(int fd) {
 fiber::async::Task<void> handle_plain(fiber::http::HttpExchange &exchange) {
     const char *body = "hello https\n";
     exchange.set_response_header("Content-Type", "text/plain");
+    exchange.set_response_status(200);
     exchange.set_response_content_length(std::strlen(body));
-    auto header_result = co_await exchange.send_response_header(200);
+    auto header_result = co_await exchange.send_response_header();
     if (!header_result) {
         co_return;
     }

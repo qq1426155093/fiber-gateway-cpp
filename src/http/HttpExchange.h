@@ -82,12 +82,13 @@ public:
     fiber::async::Task<common::IoResult<void>> discard_body() noexcept;
 
     void set_response_header(std::string_view name, std::string_view value);
+    void set_response_status(int status, std::string_view reason = {});
     void set_response_content_length(size_t len);
     void set_response_chunked();
     void set_response_close();
     void set_response_trailer(std::string_view name, std::string_view value);
 
-    fiber::async::Task<common::IoResult<void>> send_response_header(int status, std::string_view reason = {});
+    fiber::async::Task<common::IoResult<void>> send_response_header();
     fiber::async::Task<common::IoResult<void>> finish_response() noexcept;
     fiber::async::Task<common::IoResult<size_t>> write_body(BodyChunk chunk) noexcept;
     fiber::async::Task<common::IoResult<size_t>> write_body(const uint8_t *buf, size_t len, bool end) noexcept;
@@ -115,6 +116,8 @@ private:
 
     HttpHeaders response_headers_;
     HttpHeaders response_trailers_;
+    int response_status_code_ = 200;
+    std::string response_reason_;
     ResponseBodyMode response_body_mode_ = ResponseBodyMode::Auto;
     ResponseConnectionMode response_connection_mode_ = ResponseConnectionMode::Auto;
     size_t response_content_length_ = 0;

@@ -2,4 +2,5 @@
 /cmake-build-debug
 /temp
 /build
+/build-*
 /.vscode

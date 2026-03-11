@@ -169,11 +169,7 @@ TEST(Http1ServerTest, BasicGet) {
     fiber::async::spawn(group.at(0), [&]() {
         auto handler = [](fiber::http::HttpExchange &exchange) -> fiber::async::Task<void> {
             exchange.set_response_header("Content-Type", "text/plain");
-            exchange.set_response_content_length(2);
-            auto header_result = co_await exchange.send_response_header(200);
-            if (!header_result) {
-                co_return;
-            }
+            exchange.set_response_status(200);
             co_await exchange.write_body(reinterpret_cast<const uint8_t *>("ok"), 2, true);
             co_return;
         };
@@ -207,6 +203,96 @@ TEST(Http1ServerTest, BasicGet) {
     delete server;
 }
 
+TEST(Http1ServerTest, WriteBodyWithoutExplicitHeaderAutoUsesChunkedForStreaming) {
+    fiber::event::EventLoopGroup group(1);
+    group.start();
+
+    std::promise<uint16_t> port_promise;
+    std::promise<fiber::http::Http1Server *> server_promise;
+    auto port_future = port_promise.get_future();
+    auto server_future = server_promise.get_future();
+
+    fiber::async::spawn(group.at(0), [&]() {
+        auto handler = [](fiber::http::HttpExchange &exchange) -> fiber::async::Task<void> {
+            exchange.set_response_status(200);
+            auto first = co_await exchange.write_body(reinterpret_cast<const uint8_t *>("he"), 2, false);
+            if (!first) {
+                co_return;
+            }
+            co_await exchange.write_body(reinterpret_cast<const uint8_t *>("llo"), 3, true);
+            co_return;
+        };
+        return start_server(&group.at(0), handler, nullptr, &port_promise, &server_promise);
+    });
+
+    uint16_t port = port_future.get();
+    ASSERT_NE(port, 0);
+    auto *server = server_future.get();
+    ASSERT_NE(server, nullptr);
+
+    int client = connect_client(port);
+    ASSERT_GE(client, 0);
+
+    const char *request = "GET /stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    ASSERT_EQ(::send(client, request, std::strlen(request), 0), static_cast<ssize_t>(std::strlen(request)));
+
+    std::string response = recv_all(client);
+    ::close(client);
+
+    EXPECT_NE(response.find("Transfer-Encoding: chunked"), std::string::npos) << response;
+    EXPECT_NE(response.find("\r\n2\r\nhe\r\n3\r\nllo\r\n0\r\n\r\n"), std::string::npos) << response;
+
+    fiber::async::spawn(group.at(0), [&]() { return stop_server(&group.at(0), server); });
+    group.join();
+    delete server;
+}
+
+TEST(Http1ServerTest, WriteBodyWithoutExplicitHeaderAutoUsesContentLengthForLargeSingleBuffer) {
+    fiber::event::EventLoopGroup group(1);
+    group.start();
+
+    std::promise<uint16_t> port_promise;
+    std::promise<fiber::http::Http1Server *> server_promise;
+    auto port_future = port_promise.get_future();
+    auto server_future = server_promise.get_future();
+
+    fiber::async::spawn(group.at(0), [&]() {
+        auto handler = [](fiber::http::HttpExchange &exchange) -> fiber::async::Task<void> {
+            std::string body(256, 'x');
+            exchange.set_response_status(200);
+            auto write_result =
+                    co_await exchange.write_body(reinterpret_cast<const uint8_t *>(body.data()), body.size(), true);
+            if (!write_result) {
+                co_return;
+            }
+            co_return;
+        };
+        return start_server(&group.at(0), handler, nullptr, &port_promise, &server_promise);
+    });
+
+    uint16_t port = port_future.get();
+    ASSERT_NE(port, 0);
+    auto *server = server_future.get();
+    ASSERT_NE(server, nullptr);
+
+    int client = connect_client(port);
+    ASSERT_GE(client, 0);
+
+    const char *request = "GET /large HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    ASSERT_EQ(::send(client, request, std::strlen(request), 0), static_cast<ssize_t>(std::strlen(request)));
+
+    std::string response = recv_all(client);
+    ::close(client);
+
+    EXPECT_NE(response.find("Content-Length: 256"), std::string::npos) << response;
+    EXPECT_EQ(response.find("Transfer-Encoding: chunked"), std::string::npos) << response;
+    EXPECT_NE(response.find("\r\n\r\n" + std::string(256, 'x')), std::string::npos) << response;
+
+    fiber::async::spawn(group.at(0), [&]() { return stop_server(&group.at(0), server); });
+    group.join();
+    delete server;
+}
+
 TEST(Http1ServerTest, ChunkedPost) {
     fiber::event::EventLoopGroup group(1);
     group.start();
@@ -223,8 +309,9 @@ TEST(Http1ServerTest, ChunkedPost) {
                 auto read_result = co_await exchange.read_body(64);
                 if (!read_result) {
                     exchange.set_response_close();
+                    exchange.set_response_status(400);
                     exchange.set_response_content_length(0);
-                    co_await exchange.send_response_header(400, "Bad Request");
+                    co_await exchange.send_response_header();
                     co_return;
                 }
                 if (read_result->data_chain.readable_bytes() > 0) {
@@ -235,8 +322,9 @@ TEST(Http1ServerTest, ChunkedPost) {
                 }
             }
             exchange.set_response_header("Content-Type", "text/plain");
+            exchange.set_response_status(200);
             exchange.set_response_content_length(body.size());
-            auto header_result = co_await exchange.send_response_header(200);
+            auto header_result = co_await exchange.send_response_header();
             if (!header_result) {
                 co_return;
             }
@@ -310,8 +398,9 @@ TEST(Http1ServerTest, WriteBodyAcceptsBodyChunk) {
                 }
             }
 
+            exchange.set_response_status(200);
             exchange.set_response_content_length(9);
-            auto header_result = co_await exchange.send_response_header(200);
+            auto header_result = co_await exchange.send_response_header();
             if (!header_result) {
                 co_return;
             }
@@ -371,8 +460,9 @@ TEST(Http1ServerTest, ChunkedPostTrailersAreAvailableAfterBody) {
                 auto read_result = co_await exchange.read_body(64);
                 if (!read_result) {
                     exchange.set_response_close();
+                    exchange.set_response_status(400);
                     exchange.set_response_content_length(0);
-                    co_await exchange.send_response_header(400, "Bad Request");
+                    co_await exchange.send_response_header();
                     co_return;
                 }
                 if (read_result->data_chain.readable_bytes() > 0) {
@@ -387,8 +477,9 @@ TEST(Http1ServerTest, ChunkedPostTrailersAreAvailableAfterBody) {
             response.push_back('|');
             response.append(exchange.request_trailers().get("digest"));
 
+            exchange.set_response_status(200);
             exchange.set_response_content_length(response.size());
-            auto header_result = co_await exchange.send_response_header(200);
+            auto header_result = co_await exchange.send_response_header();
             if (!header_result) {
                 co_return;
             }
@@ -445,8 +536,9 @@ TEST(Http1ServerTest, ChunkedPostWaitsForCompleteTrailersBeforeLastChunk) {
                 auto read_result = co_await exchange.read_body(64);
                 if (!read_result) {
                     exchange.set_response_close();
+                    exchange.set_response_status(400);
                     exchange.set_response_content_length(0);
-                    co_await exchange.send_response_header(400, "Bad Request");
+                    co_await exchange.send_response_header();
                     co_return;
                 }
                 if (read_result->data_chain.readable_bytes() > 0) {
@@ -461,8 +553,9 @@ TEST(Http1ServerTest, ChunkedPostWaitsForCompleteTrailersBeforeLastChunk) {
             response.push_back('|');
             response.append(exchange.request_trailers().get("digest"));
 
+            exchange.set_response_status(200);
             exchange.set_response_content_length(response.size());
-            auto header_result = co_await exchange.send_response_header(200);
+            auto header_result = co_await exchange.send_response_header();
             if (!header_result) {
                 co_return;
             }
@@ -524,16 +617,18 @@ TEST(Http1ServerTest, InvalidChunkedPostReturnsBadRequest) {
                 auto read_result = co_await exchange.read_body(64);
                 if (!read_result) {
                     exchange.set_response_close();
+                    exchange.set_response_status(400);
                     exchange.set_response_content_length(0);
-                    co_await exchange.send_response_header(400, "Bad Request");
+                    co_await exchange.send_response_header();
                     co_return;
                 }
                 if (read_result->last) {
                     break;
                 }
             }
+            exchange.set_response_status(204);
             exchange.set_response_content_length(0);
-            co_await exchange.send_response_header(204, "No Content");
+            co_await exchange.send_response_header();
             co_await exchange.write_body(nullptr, 0, true);
             co_return;
         };
@@ -578,9 +673,10 @@ TEST(Http1ServerTest, ChunkedResponseCanSendTrailers) {
 
     fiber::async::spawn(group.at(0), [&]() {
         auto handler = [](fiber::http::HttpExchange &exchange) -> fiber::async::Task<void> {
+            exchange.set_response_status(200);
             exchange.set_response_chunked();
             exchange.set_response_header("Trailer", "digest, x-md5");
-            auto header_result = co_await exchange.send_response_header(200);
+            auto header_result = co_await exchange.send_response_header();
             if (!header_result) {
                 co_return;
             }
@@ -640,8 +736,9 @@ TEST(Http1ServerTest, KeepAliveReuse) {
         auto handler = [&](fiber::http::HttpExchange &exchange) -> fiber::async::Task<void> {
             int count = request_count.fetch_add(1, std::memory_order_relaxed) + 1;
             std::string body = std::to_string(count);
+            exchange.set_response_status(200);
             exchange.set_response_content_length(body.size());
-            auto header_result = co_await exchange.send_response_header(200);
+            auto header_result = co_await exchange.send_response_header();
             if (!header_result) {
                 co_return;
             }
@@ -695,8 +792,9 @@ TEST(Http1ServerTest, ChunkedKeepAlivePipelinedNextRequest) {
                 auto read_result = co_await exchange.read_body(64);
                 if (!read_result) {
                     exchange.set_response_close();
+                    exchange.set_response_status(400);
                     exchange.set_response_content_length(0);
-                    co_await exchange.send_response_header(400, "Bad Request");
+                    co_await exchange.send_response_header();
                     co_return;
                 }
                 if (read_result->data_chain.readable_bytes() > 0) {
@@ -717,8 +815,9 @@ TEST(Http1ServerTest, ChunkedKeepAlivePipelinedNextRequest) {
                 exchange.set_response_close();
             }
 
+            exchange.set_response_status(200);
             exchange.set_response_content_length(response.size());
-            auto header_result = co_await exchange.send_response_header(200);
+            auto header_result = co_await exchange.send_response_header();
             if (!header_result) {
                 co_return;
             }
@@ -779,8 +878,9 @@ TEST(Http1ServerTest, EventLoopGroupDispatch) {
             if (&fiber::event::EventLoop::current() == &group.at(1)) {
                 saw_worker_loop.store(true, std::memory_order_release);
             }
+            exchange.set_response_status(200);
             exchange.set_response_content_length(2);
-            auto header_result = co_await exchange.send_response_header(200);
+            auto header_result = co_await exchange.send_response_header();
             if (!header_result) {
                 co_return;
             }
@@ -854,8 +954,9 @@ TEST(Http1ServerTest, ShutdownAndWait) {
             while (!release_handler.load(std::memory_order_acquire)) {
                 co_await fiber::async::sleep(10ms);
             }
+            exchange.set_response_status(200);
             exchange.set_response_content_length(2);
-            auto header_result = co_await exchange.send_response_header(200);
+            auto header_result = co_await exchange.send_response_header();
             if (!header_result) {
                 co_return;
             }

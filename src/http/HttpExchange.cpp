@@ -47,6 +47,11 @@ void HttpExchange::set_response_header(std::string_view name, std::string_view v
     response_headers_.set(name, value);
 }
 
+void HttpExchange::set_response_status(int status, std::string_view reason) {
+    response_status_code_ = status;
+    response_reason_ = reason;
+}
+
 void HttpExchange::set_response_content_length(size_t len) {
     response_body_mode_ = ResponseBodyMode::ContentLength;
     response_content_length_ = len;
@@ -60,11 +65,11 @@ void HttpExchange::set_response_trailer(std::string_view name, std::string_view 
     response_trailers_.set(name, value);
 }
 
-fiber::async::Task<common::IoResult<void>> HttpExchange::send_response_header(int status, std::string_view reason) {
+fiber::async::Task<common::IoResult<void>> HttpExchange::send_response_header() {
     if (!io_) {
         co_return std::unexpected(common::IoErr::Invalid);
     }
-    co_return co_await io_->send_response_header(*this, status, reason);
+    co_return co_await io_->send_response_header(*this);
 }
 
 fiber::async::Task<common::IoResult<void>> HttpExchange::finish_response() noexcept {

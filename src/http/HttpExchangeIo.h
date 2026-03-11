@@ -19,8 +19,7 @@ public:
 
     virtual fiber::async::Task<common::IoResult<BodyChunk>> read_body(HttpExchange &exchange,
                                                                       size_t max_bytes) noexcept = 0;
-    virtual fiber::async::Task<common::IoResult<void>> send_response_header(HttpExchange &exchange, int status,
-                                                                            std::string_view reason) = 0;
+    virtual fiber::async::Task<common::IoResult<void>> send_response_header(HttpExchange &exchange) = 0;
     virtual fiber::async::Task<common::IoResult<void>> finish_response(HttpExchange &exchange) noexcept = 0;
     virtual fiber::async::Task<common::IoResult<size_t>> write_body(HttpExchange &exchange,
                                                                     BodyChunk chunk) noexcept = 0;
