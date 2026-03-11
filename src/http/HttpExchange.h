@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <string>
 #include <string_view>
 #include <vector>
 
@@ -117,7 +116,7 @@ private:
     HttpHeaders response_headers_;
     HttpHeaders response_trailers_;
     int response_status_code_ = 200;
-    std::string response_reason_;
+    std::string_view response_reason_;
     ResponseBodyMode response_body_mode_ = ResponseBodyMode::Auto;
     ResponseConnectionMode response_connection_mode_ = ResponseConnectionMode::Auto;
     size_t response_content_length_ = 0;

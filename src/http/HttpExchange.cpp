@@ -1,7 +1,9 @@
 #include "HttpExchange.h"
 
+#include <cstring>
 #include <utility>
 
+#include "../common/Assert.h"
 #include "HttpExchangeIo.h"
 
 namespace fiber::http {
@@ -48,8 +50,17 @@ void HttpExchange::set_response_header(std::string_view name, std::string_view v
 }
 
 void HttpExchange::set_response_status(int status, std::string_view reason) {
+    FIBER_ASSERT(status >= 100 && status <= 999);
     response_status_code_ = status;
-    response_reason_ = reason;
+    if (reason.empty()) {
+        response_reason_ = {};
+        return;
+    }
+
+    auto *reason_copy = static_cast<char *>(pool_.alloc(reason.size()));
+    FIBER_ASSERT(reason_copy != nullptr);
+    std::memcpy(reason_copy, reason.data(), reason.size());
+    response_reason_ = std::string_view(reason_copy, reason.size());
 }
 
 void HttpExchange::set_response_content_length(size_t len) {

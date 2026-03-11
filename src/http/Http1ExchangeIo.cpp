@@ -18,6 +18,9 @@ namespace {
 
 constexpr std::size_t kMaxDirectBodyRead = 64 * 1024;
 constexpr std::size_t kInlineFirstWriteBodyLimit = 128;
+constexpr std::size_t kHttpStatusDigits = 3;
+constexpr std::size_t kMaxContentLengthDigits = 20;
+constexpr std::size_t kMaxChunkSizeHexDigits = sizeof(std::size_t) * 2;
 
 std::string_view default_reason_phrase(int status) noexcept {
     switch (status) {
@@ -70,12 +73,6 @@ std::string_view default_reason_phrase(int status) noexcept {
         default:
             return "OK";
     }
-}
-
-std::size_t decimal_length(std::uint64_t value) noexcept {
-    std::array<char, 32> buffer{};
-    auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
-    return ec == std::errc() ? static_cast<std::size_t>(ptr - buffer.data()) : 0;
 }
 
 std::size_t append_decimal(char *dst, std::uint64_t value) noexcept {
@@ -591,11 +588,11 @@ common::IoResult<mem::IoBuf> Http1ExchangeIo::build_response_header(HttpExchange
     bool write_connection_close = close_conn && !exchange.response_headers_.contains("Connection");
 
     std::size_t header_len = version.size();
-    header_len += decimal_length(static_cast<std::uint64_t>(exchange.response_status_code_));
+    header_len += kHttpStatusDigits;
     header_len += 1 + reason.size() + kCrLf.size();
     if (write_content_length) {
         header_len += kContentLength.size();
-        header_len += decimal_length(exchange.response_content_length_);
+        header_len += kMaxContentLengthDigits;
         header_len += kCrLf.size();
     }
     if (write_transfer_encoding) {
@@ -843,13 +840,7 @@ fiber::async::Task<common::IoResult<size_t>> Http1ExchangeIo::write_body(HttpExc
         }
 
         if (exchange.response_body_mode_ == ResponseBodyMode::Chunked && len > 0) {
-            std::size_t prefix_len = decimal_length(0);
-            {
-                std::array<char, 32> buffer{};
-                prefix_len = append_hex(buffer.data(), len);
-            }
-
-            mem::IoBuf prefix = mem::IoBuf::allocate(prefix_len + 2);
+            mem::IoBuf prefix = mem::IoBuf::allocate(kMaxChunkSizeHexDigits + 2);
             if (!prefix) {
                 co_return std::unexpected(common::IoErr::NoMem);
             }
@@ -989,7 +980,7 @@ fiber::async::Task<common::IoResult<size_t>> Http1ExchangeIo::write_body(HttpExc
         if (len <= kInlineFirstWriteBodyLimit) {
             std::size_t combined_len = header_result->readable() + len;
             if (exchange.response_body_mode_ == ResponseBodyMode::Chunked && len > 0) {
-                combined_len += 32 + 4;
+                combined_len += kMaxChunkSizeHexDigits + 4;
             }
 
             mem::IoBuf combined = mem::IoBuf::allocate(combined_len);
