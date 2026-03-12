@@ -169,36 +169,10 @@ if(FIBER_BUILD_TESTS)
         endif()
 
         enable_testing()
-        add_executable(fiber_tests
-            tests/ArrayTest.cpp
-            tests/SanityTest.cpp
-            tests/GeneratorTest.cpp
-            tests/IteratorTest.cpp
-            tests/IoBufTest.cpp
-            tests/JsValueOpsTest.cpp
-            tests/JsValueEncodeTest.cpp
-            tests/ParserTest.cpp
-            tests/ScriptParserTest.cpp
-            tests/ScriptCompilerTest.cpp
-            tests/ScriptRuntimeOpsTest.cpp
-            tests/ScriptExecutionTest.cpp
-            tests/ScriptPlanTest.cpp
-            tests/ThreadGroupTest.cpp
-            tests/EventLoopTest.cpp
-            tests/WaitGroupTest.cpp
-            tests/SleepTest.cpp
-            tests/TimeoutTest.cpp
-            tests/MutexTest.cpp
-            tests/SignalTest.cpp
-            tests/TcpListenerTest.cpp
-            tests/TcpStreamTest.cpp
-            tests/UnixStreamTest.cpp
-            tests/UdpSocketTest.cpp
-            tests/IpAddressTest.cpp
-            tests/Http1ParserTest.cpp
-            tests/Http1ServerTest.cpp
-            tests/TlsAlpnTest.cpp
-        )
+        file(GLOB FIBER_TEST_SOURCES CONFIGURE_DEPENDS
+            "${CMAKE_CURRENT_LIST_DIR}/tests/*Test.cpp")
+        list(SORT FIBER_TEST_SOURCES)
+        add_executable(fiber_tests ${FIBER_TEST_SOURCES})
         target_link_libraries(fiber_tests PRIVATE fiber_lib GTest::gtest_main)
         fiber_link_runtime_allocator(fiber_tests)
         if (FIBER_ENABLE_LTO AND FIBER_IPO_SUPPORTED)
