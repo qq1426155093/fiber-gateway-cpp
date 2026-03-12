@@ -12,14 +12,9 @@ common::IoErr Http2Stream::enqueue_pending(Http2Connection &conn, Http2PendingKi
                                            std::uint8_t first_frame_flags,
                                            std::uint8_t last_frame_flags, Http2PendingEntry::ChangeFn on_change,
                                            void *user_ctx) noexcept {
-    if (stream_id_ == 0 || !conn.transport_ || !conn.transport_->valid()) {
-        return common::IoErr::Invalid;
-    }
-    if (conn.stop_sending_requested_) {
-        return conn.stop_sending_reason_;
-    }
-    if (conn_ && conn_ != &conn) {
-        return common::IoErr::Invalid;
+    common::IoErr bind_err = conn.bind_stream(*this);
+    if (bind_err != common::IoErr::None) {
+        return bind_err;
     }
 
     Http2PendingEntry *entry = conn.pending_pool_.create(*this, stream_id_, kind, std::move(payload), first_frame_flags,
@@ -28,7 +23,6 @@ common::IoErr Http2Stream::enqueue_pending(Http2Connection &conn, Http2PendingKi
         return common::IoErr::NoMem;
     }
 
-    conn_ = &conn;
     append_active_pending(*entry);
     if (pending_tail_) {
         pending_tail_->next = entry;
@@ -36,9 +30,7 @@ common::IoErr Http2Stream::enqueue_pending(Http2Connection &conn, Http2PendingKi
         pending_head_ = entry;
     }
     pending_tail_ = entry;
-    refresh_connection_membership();
-    conn.reevaluate_stream(*this);
-    conn.start_dispatch_loop();
+    try_schedule_pending();
     return common::IoErr::None;
 }
 
@@ -81,7 +73,7 @@ Http2Stream::ScheduleResult Http2Stream::schedule_pending() noexcept {
         }
 
         bool first_fragment = remaining == entry->total_bytes;
-        std::size_t payload_bytes = std::min<std::size_t>(remaining, conn_->options_.max_frame_size);
+        std::size_t payload_bytes = std::min<std::size_t>(remaining, conn_->peer_max_outbound_frame_size_);
         if (entry->kind == Http2PendingKind::Data) {
             payload_bytes = std::min<std::size_t>(payload_bytes, static_cast<std::size_t>(conn_->conn_send_window_));
             payload_bytes = std::min<std::size_t>(payload_bytes, static_cast<std::size_t>(send_window_));
@@ -170,10 +162,7 @@ Http2Stream::ScheduleResult Http2Stream::schedule_pending() noexcept {
 
 void Http2Stream::update_send_window(std::int32_t delta) noexcept {
     send_window_ += delta;
-    if (conn_) {
-        conn_->reevaluate_stream(*this);
-        conn_->start_dispatch_loop();
-    }
+    try_schedule_pending();
 }
 
 void Http2Stream::drain_pending(common::IoErr result) noexcept {
@@ -187,6 +176,15 @@ void Http2Stream::drain_pending(common::IoErr result) noexcept {
         }
         entry = next;
     }
+}
+
+void Http2Stream::close(common::IoErr result) noexcept {
+    state_ = State::Closed;
+    active_ = false;
+    if (conn_) {
+        conn_->remove_conn_wait_stream(*this);
+    }
+    drain_pending(result);
 }
 
 void Http2Stream::append_active_pending(Http2PendingEntry &entry) noexcept {
@@ -221,10 +219,6 @@ void Http2Stream::pop_pending_head() noexcept {
         pending_tail_ = nullptr;
     }
     entry->next = nullptr;
-    if (conn_) {
-        conn_->reevaluate_stream(*this);
-    }
-    refresh_connection_membership();
 }
 
 void Http2Stream::maybe_finish_pending(Http2PendingEntry &entry) noexcept {
@@ -256,25 +250,18 @@ void Http2Stream::finish_pending(Http2PendingEntry &entry, common::IoErr result)
                         0, result);
     remove_active_pending(entry);
     conn_->pending_pool_.destroy(&entry);
-    if (!pending_head_) {
-        conn_->reevaluate_stream(*this);
-    }
-    refresh_connection_membership();
 }
 
-void Http2Stream::refresh_connection_membership() noexcept {
-    if (!conn_) {
+void Http2Stream::try_schedule_pending() noexcept {
+    if (!conn_ || conn_->stop_sending_requested_) {
         return;
     }
 
-    bool needs_registry = active_pending_head_ != nullptr;
-    if (needs_registry && !in_pending_registry_) {
-        conn_->register_pending_stream(*this);
-        return;
-    }
-
-    if (!needs_registry && in_pending_registry_) {
-        conn_->unregister_pending_stream(*this);
+    ScheduleResult result = schedule_pending();
+    if (result == ScheduleResult::BlockedByConnWindow) {
+        conn_->append_conn_wait_stream(*this);
+    } else {
+        conn_->remove_conn_wait_stream(*this);
     }
 }
 
@@ -299,10 +286,7 @@ void Http2Stream::handle_send_done(void *user_data, std::size_t, std::size_t wri
     FIBER_ASSERT(pending->inflight_sends > 0);
     --pending->inflight_sends;
     stream.maybe_finish_pending(*pending);
-    if (stream.conn_ && !stream.conn_->stop_sending_requested_) {
-        stream.conn_->reevaluate_stream(stream);
-        stream.conn_->start_dispatch_loop();
-    }
+    stream.try_schedule_pending();
 }
 
 } // namespace fiber::http

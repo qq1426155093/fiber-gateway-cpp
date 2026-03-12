@@ -2,6 +2,7 @@
 #define FIBER_HTTP_HTTP2_CONNECTION_H
 
 #include <chrono>
+#include <array>
 #include <cstring>
 #include <cstddef>
 #include <cstdint>
@@ -54,12 +55,6 @@ public:
         Stopping,
     };
 
-    enum class DispatcherState : std::uint8_t {
-        WaitingForWork,
-        Dispatching,
-        Stopping,
-    };
-
     struct SendEntry {
         using DoneFn = void (*)(void *user_data, std::size_t total_bytes, std::size_t written_bytes,
                                 std::size_t frame_header_size, std::size_t logical_bytes,
@@ -105,18 +100,45 @@ protected:
     common::IoErr enqueue_send_buf(mem::IoBuf &&buf, SendEntry::DoneFn on_done, void *user_data = nullptr) noexcept;
     common::IoErr enqueue_send_chain(mem::IoBufChain &&bufs, SendEntry::DoneFn on_done,
                                      void *user_data = nullptr) noexcept;
+    common::IoErr bind_stream(Http2Stream &stream) noexcept;
     void update_connection_send_window(std::int32_t delta) noexcept;
     void update_stream_send_window(Http2Stream &stream, std::int32_t delta) noexcept;
     void stop_sending(common::IoErr reason = common::IoErr::Canceled) noexcept;
     [[nodiscard]] WriterState writer_state() const noexcept;
-    [[nodiscard]] DispatcherState dispatcher_state() const noexcept;
+    [[nodiscard]] std::int32_t connection_send_window() const noexcept { return conn_send_window_; }
+    [[nodiscard]] std::uint32_t peer_max_outbound_frame_size() const noexcept { return peer_max_outbound_frame_size_; }
+    [[nodiscard]] std::uint32_t peer_max_concurrent_streams() const noexcept {
+        return peer_advertised_max_concurrent_streams_;
+    }
+    [[nodiscard]] bool peer_enable_push() const noexcept { return peer_enable_push_; }
+    [[nodiscard]] bool has_stream(std::uint32_t stream_id) const noexcept { return streams_.find(stream_id) != nullptr; }
+    [[nodiscard]] bool send_queue_idle() const noexcept { return !writer_running_ && send_head_ == nullptr; }
 
 private:
+    common::IoErr consume_incoming_frame_payload(const FrameHeader &fhr, const mem::IoBuf &buf, std::size_t offset,
+                                                 std::size_t length) noexcept;
+    common::IoErr handle_settings_payload(const FrameHeader &fhr, const mem::IoBuf &buf, std::size_t offset,
+                                          std::size_t length) noexcept;
+    common::IoErr handle_ping_payload(const FrameHeader &fhr, const mem::IoBuf &buf, std::size_t offset,
+                                      std::size_t length) noexcept;
+    common::IoErr handle_window_update_payload(const FrameHeader &fhr, const mem::IoBuf &buf, std::size_t offset,
+                                               std::size_t length) noexcept;
+    common::IoErr handle_rst_stream_payload(const FrameHeader &fhr, const mem::IoBuf &buf, std::size_t offset,
+                                            std::size_t length) noexcept;
+    common::IoErr apply_settings_parameter(std::uint16_t id, std::uint32_t value) noexcept;
+    common::IoErr apply_peer_initial_stream_window(std::uint32_t value) noexcept;
+    common::IoErr send_control_frame(Http2FrameType type, std::uint8_t flags, std::uint32_t stream_id,
+                                     const std::uint8_t *payload, std::size_t length) noexcept;
+    common::IoErr send_settings_ack() noexcept;
+    common::IoErr send_ping_ack(const std::uint8_t *opaque_data) noexcept;
+    common::IoErr send_rst_stream(std::uint32_t stream_id, Http2ErrorCode error_code) noexcept;
+    void handle_stream_error(std::uint32_t stream_id, Http2ErrorCode error_code,
+                             common::IoErr pending_result = common::IoErr::Canceled) noexcept;
+    [[nodiscard]] bool is_idle_stream(std::uint32_t stream_id) const noexcept;
     [[nodiscard]] std::size_t configured_max_active_streams() const noexcept;
     fiber::async::Task<void> run_send_loop() noexcept;
-    fiber::async::Task<void> run_dispatch_loop() noexcept;
     void start_send_loop() noexcept;
-    void start_dispatch_loop() noexcept;
+    void drain_conn_blocked_streams() noexcept;
     [[nodiscard]] SendEntry *acquire_send_entry() noexcept;
     void release_send_entry(SendEntry *entry) noexcept;
     [[nodiscard]] common::IoErr enqueue_send_entry(SendEntry *entry) noexcept;
@@ -124,14 +146,8 @@ private:
     void drain_send_queue(common::IoErr result) noexcept;
     void notify_send_done(SendEntry *entry) noexcept;
     void drain_pending_entries(common::IoErr result) noexcept;
-    void reevaluate_stream(Http2Stream &stream) noexcept;
-    void refresh_conn_window_wait_list() noexcept;
-    void append_ready_stream(Http2Stream &stream) noexcept;
-    void remove_ready_stream(Http2Stream &stream) noexcept;
     void append_conn_wait_stream(Http2Stream &stream) noexcept;
     void remove_conn_wait_stream(Http2Stream &stream) noexcept;
-    void register_pending_stream(Http2Stream &stream) noexcept;
-    void unregister_pending_stream(Http2Stream &stream) noexcept;
     static void encode_frame_header(std::uint8_t *out, std::uint32_t length, Http2FrameType type, std::uint8_t flags,
                                     std::uint32_t stream_id) noexcept;
 
@@ -144,21 +160,25 @@ private:
     std::size_t peer_active_stream_count_ = 0;
     std::size_t local_push_stream_count_ = 0;
     std::int32_t conn_send_window_ = 0;
+    std::int32_t peer_initial_stream_send_window_ = 65535;
+    std::uint32_t peer_header_table_size_ = 4096;
+    std::uint32_t peer_max_outbound_frame_size_ = 16384;
+    std::uint32_t peer_max_header_list_size_ = 0xffffffffU;
+    bool peer_enable_push_ = true;
+    std::array<std::uint8_t, 8> control_payload_scratch_{};
+    std::size_t control_payload_used_ = 0;
+    std::array<std::uint8_t, 6> settings_scratch_{};
+    std::size_t settings_scratch_used_ = 0;
     Http2PendingPool pending_pool_;
-    Http2Stream *ready_head_ = nullptr;
-    Http2Stream *ready_tail_ = nullptr;
     Http2Stream *conn_wait_head_ = nullptr;
     Http2Stream *conn_wait_tail_ = nullptr;
-    Http2Stream *pending_stream_head_ = nullptr;
     SendEntry *send_head_ = nullptr;
     SendEntry *send_tail_ = nullptr;
     SendEntry *sending_ = nullptr;
     SendEntry *free_send_entries_ = nullptr;
     std::size_t free_send_entry_count_ = 0;
     WriterState writer_state_ = WriterState::WaitingForData;
-    DispatcherState dispatcher_state_ = DispatcherState::WaitingForWork;
     bool writer_running_ = false;
-    bool dispatcher_running_ = false;
     bool stop_sending_requested_ = false;
     common::IoErr stop_sending_reason_ = common::IoErr::Canceled;
 

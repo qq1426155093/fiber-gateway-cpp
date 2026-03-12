@@ -37,6 +37,7 @@ public:
     [[nodiscard]] std::uint32_t stream_id() const noexcept { return stream_id_; }
     [[nodiscard]] State state() const noexcept { return state_; }
     void set_state(State state) noexcept { state_ = state; }
+    [[nodiscard]] std::int32_t send_window() const noexcept { return send_window_; }
 
     [[nodiscard]] bool active() const noexcept { return active_; }
     void set_active(bool active) noexcept { active_ = active; }
@@ -52,6 +53,7 @@ public:
     [[nodiscard]] ScheduleResult schedule_pending() noexcept;
     void update_send_window(std::int32_t delta) noexcept;
     void drain_pending(common::IoErr result) noexcept;
+    void close(common::IoErr result = common::IoErr::Canceled) noexcept;
 
 private:
     void append_active_pending(Http2PendingEntry &entry) noexcept;
@@ -59,7 +61,7 @@ private:
     void pop_pending_head() noexcept;
     void maybe_finish_pending(Http2PendingEntry &entry) noexcept;
     void finish_pending(Http2PendingEntry &entry, common::IoErr result) noexcept;
-    void refresh_connection_membership() noexcept;
+    void try_schedule_pending() noexcept;
     static void handle_send_done(void *user_data, std::size_t total_bytes, std::size_t written_bytes,
                                  std::size_t frame_header_size, std::size_t logical_bytes,
                                  common::IoErr result) noexcept;
@@ -74,12 +76,6 @@ private:
     Http2PendingEntry *pending_head_ = nullptr;
     Http2PendingEntry *pending_tail_ = nullptr;
     Http2PendingEntry *active_pending_head_ = nullptr;
-    Http2Stream *pending_prev_ = nullptr;
-    Http2Stream *pending_next_ = nullptr;
-    bool in_pending_registry_ = false;
-    Http2Stream *ready_prev_ = nullptr;
-    Http2Stream *ready_next_ = nullptr;
-    bool in_ready_list_ = false;
     Http2Stream *conn_wait_prev_ = nullptr;
     Http2Stream *conn_wait_next_ = nullptr;
     bool in_conn_window_wait_list_ = false;

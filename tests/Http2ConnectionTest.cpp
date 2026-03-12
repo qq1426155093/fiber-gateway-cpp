@@ -201,10 +201,21 @@ struct SendOutcome {
 struct PendingOutcome {
     fiber::common::IoErr submit_error = fiber::common::IoErr::None;
     fiber::http::Http2Connection::WriterState writer_state = fiber::http::Http2Connection::WriterState::WaitingForData;
-    fiber::http::Http2Connection::DispatcherState dispatcher_state =
-            fiber::http::Http2Connection::DispatcherState::WaitingForWork;
     std::vector<PendingEvent> events;
     std::string written;
+};
+
+struct ControlRunOutcome {
+    fiber::common::IoResult<void> result;
+    std::string written;
+    fiber::http::Http2Connection::WriterState writer_state = fiber::http::Http2Connection::WriterState::WaitingForData;
+    std::int32_t conn_send_window = 0;
+    std::uint32_t peer_max_frame_size = 0;
+    std::uint32_t peer_max_concurrent_streams = 0;
+    bool peer_enable_push = true;
+    std::int32_t stream1_send_window = 0;
+    fiber::http::Http2Stream::State stream1_state = fiber::http::Http2Stream::State::Idle;
+    bool stream1_registered = false;
 };
 
 std::string iobuf_to_string(const fiber::mem::IoBuf &buf) {
@@ -401,7 +412,6 @@ public:
     PendingOutcome snapshot() const {
         PendingOutcome outcome;
         outcome.writer_state = writer_state();
-        outcome.dispatcher_state = dispatcher_state();
         outcome.events = events_;
         if (fake_transport_) {
             outcome.written = fake_transport_->written();
@@ -433,9 +443,32 @@ private:
     std::vector<PendingEvent> events_;
 };
 
+class ControlHttp2Connection final : public fiber::http::Http2Connection {
+public:
+    ControlHttp2Connection(std::unique_ptr<fiber::http::HttpTransport> transport, FakeHttpTransport *fake_transport,
+                           Options options = {}) :
+        fiber::http::Http2Connection(std::move(transport), options), fake_transport_(fake_transport) {}
+
+    fiber::common::IoErr attach_stream(fiber::http::Http2Stream &stream) noexcept { return bind_stream(stream); }
+    [[nodiscard]] std::int32_t current_connection_send_window() const noexcept { return connection_send_window(); }
+    [[nodiscard]] std::uint32_t current_peer_max_frame_size() const noexcept { return peer_max_outbound_frame_size(); }
+    [[nodiscard]] std::uint32_t current_peer_max_concurrent_streams() const noexcept {
+        return peer_max_concurrent_streams();
+    }
+    [[nodiscard]] bool current_peer_enable_push() const noexcept { return peer_enable_push(); }
+    [[nodiscard]] bool current_has_stream(std::uint32_t stream_id) const noexcept { return has_stream(stream_id); }
+    [[nodiscard]] WriterState current_writer_state() const noexcept { return writer_state(); }
+    [[nodiscard]] bool send_idle() const noexcept { return send_queue_idle(); }
+    [[nodiscard]] const std::string &written() const noexcept { return fake_transport_->written(); }
+
+private:
+    FakeHttpTransport *fake_transport_ = nullptr;
+};
+
 using SendScript = std::function<fiber::common::IoErr(SendingHttp2Connection &)>;
 using PendingScript = std::function<fiber::common::IoErr(PendingHttp2Connection &, fiber::http::Http2Stream &,
                                                          fiber::http::Http2Stream &)>;
+using ControlScript = std::function<void(ControlHttp2Connection &, fiber::http::Http2Stream &, fiber::http::Http2Stream &)>;
 
 DetachedTask run_send_connection(std::shared_ptr<std::promise<SendOutcome>> promise, std::vector<size_t> write_steps,
                                  std::size_t expected_done, SendScript submit,
@@ -543,6 +576,63 @@ PendingOutcome execute_pending_connection(PendingScript submit, std::size_t expe
     return outcome;
 }
 
+DetachedTask run_control_connection(std::shared_ptr<std::promise<ControlRunOutcome>> promise, std::vector<std::string> chunks,
+                                    ControlScript setup, fiber::http::Http2Connection::Options options = {}) {
+    auto transport = std::make_unique<FakeHttpTransport>(std::move(chunks));
+    auto *fake_transport = transport.get();
+    ControlHttp2Connection connection(std::move(transport), fake_transport, options);
+    fiber::http::Http2Stream stream1(1);
+    fiber::http::Http2Stream stream3(3);
+
+    if (setup) {
+        setup(connection, stream1, stream3);
+    }
+
+    ControlRunOutcome outcome;
+    outcome.result = co_await connection.run();
+    for (int i = 0; i < 20 && !connection.send_idle(); ++i) {
+        co_await fiber::async::sleep(std::chrono::milliseconds(1));
+    }
+    co_await fiber::async::sleep(std::chrono::milliseconds(1));
+    outcome.written = connection.written();
+    outcome.writer_state = connection.current_writer_state();
+    outcome.conn_send_window = connection.current_connection_send_window();
+    outcome.peer_max_frame_size = connection.current_peer_max_frame_size();
+    outcome.peer_max_concurrent_streams = connection.current_peer_max_concurrent_streams();
+    outcome.peer_enable_push = connection.current_peer_enable_push();
+    outcome.stream1_send_window = stream1.send_window();
+    outcome.stream1_state = stream1.state();
+    outcome.stream1_registered = connection.current_has_stream(stream1.stream_id());
+    promise->set_value(std::move(outcome));
+    fiber::event::EventLoop::current().stop();
+    co_return;
+}
+
+ControlRunOutcome execute_control_connection(std::vector<std::string> chunks, ControlScript setup = {},
+                                             fiber::http::Http2Connection::Options options = {}) {
+    fiber::event::EventLoopGroup group(1);
+    auto promise = std::make_shared<std::promise<ControlRunOutcome>>();
+    auto future = promise->get_future();
+
+    group.start();
+    fiber::async::spawn(group.at(0), [promise = std::move(promise), chunks = std::move(chunks), setup = std::move(setup),
+                                      options]() mutable {
+        return run_control_connection(std::move(promise), std::move(chunks), std::move(setup), options);
+    });
+
+    auto status = future.wait_for(std::chrono::seconds(2));
+    if (status != std::future_status::ready) {
+        group.stop();
+        group.join();
+        ADD_FAILURE() << "Timed out waiting for http2 control task";
+        return {};
+    }
+
+    ControlRunOutcome outcome = future.get();
+    group.join();
+    return outcome;
+}
+
 } // namespace
 
 TEST(Http2ConnectionTest, ReportsPayloadChunksWithFrameOffsets) {
@@ -576,12 +666,12 @@ TEST(Http2ConnectionTest, AllowsClientsToParseFramesWithoutPeerPreface) {
     fiber::http::Http2Connection::Options options;
     options.expect_peer_preface = false;
 
-    std::string ping = make_frame(4, 0x6, 0x1, 0, "pong");
-    RunOutcome outcome = execute_connection({ping}, options);
+    std::string data = make_frame(4, 0x0, 0x1, 1, "pong");
+    RunOutcome outcome = execute_connection({data}, options);
 
     ASSERT_TRUE(outcome.result.has_value());
     ASSERT_EQ(outcome.chunks.size(), 1U);
-    EXPECT_EQ(outcome.chunks[0].header.type, fiber::http::Http2FrameType::Ping);
+    EXPECT_EQ(outcome.chunks[0].header.type, fiber::http::Http2FrameType::Data);
     EXPECT_EQ(outcome.chunks[0].offset, 0U);
     EXPECT_EQ(outcome.chunks[0].length, 4U);
     EXPECT_EQ(iobuf_to_string(outcome.chunks[0].payload), "pong");
@@ -591,12 +681,12 @@ TEST(Http2ConnectionTest, ReportsZeroLengthFrames) {
     fiber::http::Http2Connection::Options options;
     options.expect_peer_preface = false;
 
-    std::string settings = make_frame(0, 0x4, 0x0, 0, "");
-    RunOutcome outcome = execute_connection({settings}, options);
+    std::string data = make_frame(0, 0x0, 0x0, 1, "");
+    RunOutcome outcome = execute_connection({data}, options);
 
     ASSERT_TRUE(outcome.result.has_value());
     ASSERT_EQ(outcome.chunks.size(), 1U);
-    EXPECT_EQ(outcome.chunks[0].header.type, fiber::http::Http2FrameType::Settings);
+    EXPECT_EQ(outcome.chunks[0].header.type, fiber::http::Http2FrameType::Data);
     EXPECT_EQ(outcome.chunks[0].offset, 0U);
     EXPECT_EQ(outcome.chunks[0].length, 0U);
     EXPECT_EQ(outcome.chunks[0].payload.readable(), 0U);
@@ -653,6 +743,130 @@ TEST(Http2ConnectionTest, PropagatesPayloadCallbackErrors) {
     EXPECT_EQ(outcome.result.error(), fiber::common::IoErr::Busy);
     ASSERT_EQ(outcome.chunks.size(), 1U);
     EXPECT_EQ(iobuf_to_string(outcome.chunks[0].payload), "data");
+}
+
+TEST(Http2ConnectionTest, SettingsFrameUpdatesPeerStateAndSendsAck) {
+    fiber::http::Http2Connection::Options options;
+    options.expect_peer_preface = false;
+
+    std::string payload;
+    payload.push_back('\0');
+    payload.push_back('\x4');
+    payload.push_back('\0');
+    payload.push_back('\x01');
+    payload.push_back('\x11');
+    payload.push_back('\x70');
+    payload.push_back('\0');
+    payload.push_back('\x5');
+    payload.push_back('\0');
+    payload.push_back('\0');
+    payload.push_back('\x80');
+    payload.push_back('\0');
+    std::string settings = make_frame(static_cast<std::uint32_t>(payload.size()), 0x4, 0x0, 0, payload);
+
+    ControlRunOutcome outcome = execute_control_connection(
+            {settings},
+            [](ControlHttp2Connection &connection, fiber::http::Http2Stream &stream1, fiber::http::Http2Stream &) {
+                ASSERT_EQ(connection.attach_stream(stream1), fiber::common::IoErr::None);
+            },
+            options);
+
+    ASSERT_TRUE(outcome.result.has_value());
+    EXPECT_EQ(outcome.peer_max_frame_size, 32768U);
+    EXPECT_EQ(outcome.stream1_send_window, 70000);
+    std::vector<EncodedFrame> frames = parse_frames(outcome.written);
+    ASSERT_EQ(frames.size(), 1U) << describe_frames(frames);
+    EXPECT_EQ(frames[0].type, 0x4);
+    EXPECT_EQ(frames[0].flags, 0x1);
+    EXPECT_EQ(frames[0].stream_id, 0U);
+    EXPECT_TRUE(frames[0].payload.empty());
+}
+
+TEST(Http2ConnectionTest, PingFrameRepliesWithAckAndSamePayload) {
+    fiber::http::Http2Connection::Options options;
+    options.expect_peer_preface = false;
+
+    std::string ping = make_frame(8, 0x6, 0x0, 0, "12345678");
+    ControlRunOutcome outcome = execute_control_connection({ping}, {}, options);
+
+    ASSERT_TRUE(outcome.result.has_value());
+    std::vector<EncodedFrame> frames = parse_frames(outcome.written);
+    ASSERT_EQ(frames.size(), 1U) << describe_frames(frames);
+    EXPECT_EQ(frames[0].type, 0x6);
+    EXPECT_EQ(frames[0].flags, 0x1);
+    EXPECT_EQ(frames[0].stream_id, 0U);
+    EXPECT_EQ(frames[0].payload, "12345678");
+}
+
+TEST(Http2ConnectionTest, WindowUpdateIncreasesConnectionAndStreamSendWindow) {
+    fiber::http::Http2Connection::Options options;
+    options.expect_peer_preface = false;
+
+    std::string stream_update_payload;
+    stream_update_payload.push_back('\0');
+    stream_update_payload.push_back('\0');
+    stream_update_payload.push_back('\0');
+    stream_update_payload.push_back('\x64');
+    std::string conn_update_payload;
+    conn_update_payload.push_back('\0');
+    conn_update_payload.push_back('\0');
+    conn_update_payload.push_back('\0');
+    conn_update_payload.push_back('\x32');
+
+    ControlRunOutcome outcome = execute_control_connection(
+            {make_frame(4, 0x8, 0x0, 1, stream_update_payload), make_frame(4, 0x8, 0x0, 0, conn_update_payload)},
+            [](ControlHttp2Connection &connection, fiber::http::Http2Stream &stream1, fiber::http::Http2Stream &) {
+                ASSERT_EQ(connection.attach_stream(stream1), fiber::common::IoErr::None);
+            },
+            options);
+
+    ASSERT_TRUE(outcome.result.has_value());
+    EXPECT_EQ(outcome.stream1_send_window, 65635);
+    EXPECT_EQ(outcome.conn_send_window, 65585);
+}
+
+TEST(Http2ConnectionTest, ZeroIncrementWindowUpdateOnStreamSendsRstStream) {
+    fiber::http::Http2Connection::Options options;
+    options.expect_peer_preface = false;
+
+    std::string payload(4, '\0');
+    ControlRunOutcome outcome = execute_control_connection({make_frame(4, 0x8, 0x0, 1, payload)}, {}, options);
+
+    ASSERT_TRUE(outcome.result.has_value());
+    std::vector<EncodedFrame> frames = parse_frames(outcome.written);
+    ASSERT_EQ(frames.size(), 1U) << describe_frames(frames);
+    EXPECT_EQ(frames[0].type, 0x3);
+    EXPECT_EQ(frames[0].stream_id, 1U);
+    ASSERT_EQ(frames[0].payload.size(), 4U);
+    EXPECT_EQ(static_cast<unsigned char>(frames[0].payload[3]), 0x1U);
+}
+
+TEST(Http2ConnectionTest, RstStreamClosesActiveStream) {
+    fiber::http::Http2Connection::Options options;
+    options.expect_peer_preface = false;
+
+    std::string payload(4, '\0');
+    payload[3] = '\x8';
+    ControlRunOutcome outcome = execute_control_connection(
+            {make_frame(4, 0x3, 0x0, 1, payload)},
+            [](ControlHttp2Connection &connection, fiber::http::Http2Stream &stream1, fiber::http::Http2Stream &) {
+                ASSERT_EQ(connection.attach_stream(stream1), fiber::common::IoErr::None);
+            },
+            options);
+
+    ASSERT_TRUE(outcome.result.has_value());
+    EXPECT_EQ(outcome.stream1_state, fiber::http::Http2Stream::State::Closed);
+    EXPECT_FALSE(outcome.stream1_registered);
+}
+
+TEST(Http2ConnectionTest, RejectsInvalidPingLengthAsConnectionError) {
+    fiber::http::Http2Connection::Options options;
+    options.expect_peer_preface = false;
+
+    ControlRunOutcome outcome = execute_control_connection({make_frame(4, 0x6, 0x0, 0, "pong")}, {}, options);
+
+    ASSERT_FALSE(outcome.result.has_value());
+    EXPECT_EQ(outcome.result.error(), fiber::common::IoErr::Invalid);
 }
 
 TEST(Http2ConnectionTest, SendsStableSpanAcrossPartialWrites) {
