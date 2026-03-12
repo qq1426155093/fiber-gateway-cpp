@@ -2,10 +2,10 @@
 
 #include <algorithm>
 #include <cstring>
-#include <new>
 #include <string_view>
 
 #include "../async/Spawn.h"
+#include "../common/Assert.h"
 
 namespace fiber::http {
 
@@ -71,12 +71,17 @@ Http2Connection::Http2Connection(std::unique_ptr<HttpTransport> transport) :
     Http2Connection(std::move(transport), Options{}) {}
 
 Http2Connection::Http2Connection(std::unique_ptr<HttpTransport> transport, Options options) :
-    transport_(std::move(transport)), options_(std::move(options)) {}
+    transport_(std::move(transport)), options_(std::move(options)), pending_pool_(options_.max_free_pending_entries) {
+    peer_advertised_max_concurrent_streams_ = options_.max_peer_concurrent_streams;
+    conn_send_window_ = options_.initial_connection_send_window;
+    FIBER_ASSERT(streams_.init(configured_max_active_streams()));
+}
 
 Http2Connection::~Http2Connection() {
     if (!writer_running_) {
         drain_send_queue(common::IoErr::Canceled);
     }
+    drain_pending_entries(common::IoErr::Canceled);
 
     while (free_send_entries_) {
         SendEntry *entry = free_send_entries_;
@@ -198,135 +203,6 @@ const Http2Connection::SendPayload *Http2Connection::SendEntry::payload_ptr() co
     return std::launder(reinterpret_cast<const SendPayload *>(payload_storage_));
 }
 
-Http2Connection::SendPayload::~SendPayload() { reset(); }
-
-Http2Connection::SendPayload::SendPayload(SendPayload &&other) noexcept { move_from(std::move(other)); }
-
-Http2Connection::SendPayload &Http2Connection::SendPayload::operator=(SendPayload &&other) noexcept {
-    if (this == &other) {
-        return *this;
-    }
-    reset();
-    move_from(std::move(other));
-    return *this;
-}
-
-Http2Connection::SendPayload::Kind Http2Connection::SendPayload::kind() const noexcept { return kind_; }
-
-bool Http2Connection::SendPayload::empty() const noexcept { return readable_bytes() == 0; }
-
-std::size_t Http2Connection::SendPayload::readable_bytes() const noexcept {
-    switch (kind_) {
-        case Kind::StableSpan:
-            return span().length - span().offset;
-        case Kind::IoBuf:
-            return buf().readable();
-        case Kind::IoBufChain:
-            return chain().readable_bytes();
-        case Kind::None:
-        default:
-            return 0;
-    }
-}
-
-void Http2Connection::SendPayload::reset() noexcept {
-    switch (kind_) {
-        case Kind::StableSpan:
-            span().~StableSpan();
-            break;
-        case Kind::IoBuf:
-            buf().~IoBuf();
-            break;
-        case Kind::IoBufChain:
-            chain().~IoBufChain();
-            break;
-        case Kind::None:
-        default:
-            break;
-    }
-    kind_ = Kind::None;
-}
-
-void Http2Connection::SendPayload::set_stable_span(const std::uint8_t *data, std::size_t length) noexcept {
-    reset();
-    new (&storage_.span) StableSpan{data, length, 0};
-    kind_ = Kind::StableSpan;
-}
-
-void Http2Connection::SendPayload::set_buf(mem::IoBuf &&buf) noexcept {
-    reset();
-    new (&storage_.buf) mem::IoBuf(std::move(buf));
-    kind_ = Kind::IoBuf;
-}
-
-void Http2Connection::SendPayload::set_chain(mem::IoBufChain &&bufs) noexcept {
-    reset();
-    new (&storage_.chain) mem::IoBufChain(std::move(bufs));
-    kind_ = Kind::IoBufChain;
-}
-
-fiber::async::Task<common::IoResult<size_t>>
-Http2Connection::SendPayload::write_once(HttpTransport &transport, std::chrono::milliseconds timeout) noexcept {
-    switch (kind_) {
-        case Kind::StableSpan: {
-            StableSpan &value = span();
-            std::size_t remaining = value.length - value.offset;
-            auto result = co_await transport.write(value.data + value.offset, remaining, timeout);
-            if (result) {
-                value.offset += *result;
-            }
-            co_return result;
-        }
-        case Kind::IoBuf: {
-            mem::IoBuf &value = buf();
-            auto result = co_await transport.write(value.readable_data(), value.readable(), timeout);
-            if (result) {
-                value.consume(*result);
-            }
-            co_return result;
-        }
-        case Kind::IoBufChain:
-            co_return co_await transport.writev(chain(), timeout);
-        case Kind::None:
-        default:
-            co_return static_cast<size_t>(0);
-    }
-}
-
-void Http2Connection::SendPayload::move_from(SendPayload &&other) noexcept {
-    switch (other.kind_) {
-        case Kind::StableSpan:
-            new (&storage_.span) StableSpan(other.span());
-            kind_ = Kind::StableSpan;
-            break;
-        case Kind::IoBuf:
-            new (&storage_.buf) mem::IoBuf(std::move(other.buf()));
-            kind_ = Kind::IoBuf;
-            break;
-        case Kind::IoBufChain:
-            new (&storage_.chain) mem::IoBufChain(std::move(other.chain()));
-            kind_ = Kind::IoBufChain;
-            break;
-        case Kind::None:
-        default:
-            kind_ = Kind::None;
-            break;
-    }
-    other.reset();
-}
-
-Http2Connection::StableSpan &Http2Connection::SendPayload::span() noexcept { return storage_.span; }
-
-const Http2Connection::StableSpan &Http2Connection::SendPayload::span() const noexcept { return storage_.span; }
-
-mem::IoBuf &Http2Connection::SendPayload::buf() noexcept { return storage_.buf; }
-
-const mem::IoBuf &Http2Connection::SendPayload::buf() const noexcept { return storage_.buf; }
-
-mem::IoBufChain &Http2Connection::SendPayload::chain() noexcept { return storage_.chain; }
-
-const mem::IoBufChain &Http2Connection::SendPayload::chain() const noexcept { return storage_.chain; }
-
 fiber::async::Task<void> Http2Connection::run_send_loop() noexcept {
     for (;;) {
         if (stop_sending_requested_) {
@@ -342,13 +218,20 @@ fiber::async::Task<void> Http2Connection::run_send_loop() noexcept {
         }
 
         sending_ = entry;
-        if (entry->payload_ptr()->empty()) {
+        if (entry->frame_header_size == entry->written_bytes && entry->payload_ptr()->empty()) {
             finish_send_entry(entry, common::IoErr::None);
             continue;
         }
 
         writer_state_ = WriterState::Writing;
-        auto write_result = co_await entry->payload_ptr()->write_once(*transport_, options_.write_timeout);
+        common::IoResult<size_t> write_result = static_cast<size_t>(0);
+        if (entry->written_bytes < entry->frame_header_size) {
+            std::size_t header_offset = entry->written_bytes;
+            write_result = co_await transport_->write(entry->frame_header_ + header_offset,
+                                                      entry->frame_header_size - header_offset, options_.write_timeout);
+        } else {
+            write_result = co_await entry->payload_ptr()->write_once(*transport_, options_.write_timeout);
+        }
         if (!write_result) {
             writer_state_ = WriterState::Stopping;
             finish_send_entry(entry, write_result.error());
@@ -363,16 +246,52 @@ fiber::async::Task<void> Http2Connection::run_send_loop() noexcept {
         }
 
         entry->written_bytes += *write_result;
-        if (entry->payload_ptr()->empty()) {
+        if (entry->written_bytes >= entry->frame_header_size && entry->payload_ptr()->empty()) {
             finish_send_entry(entry, common::IoErr::None);
         }
     }
 
     sending_ = nullptr;
     writer_running_ = false;
+    if (stop_sending_requested_) {
+        drain_pending_entries(stop_sending_reason_);
+    }
     if (!stop_sending_requested_ && writer_state_ != WriterState::Stopping) {
         writer_state_ = WriterState::WaitingForData;
     }
+}
+
+fiber::async::Task<void> Http2Connection::run_dispatch_loop() noexcept {
+    for (;;) {
+        if (stop_sending_requested_) {
+            dispatcher_state_ = DispatcherState::Stopping;
+            break;
+        }
+
+        if (!ready_head_) {
+            dispatcher_state_ = DispatcherState::WaitingForWork;
+            break;
+        }
+
+        dispatcher_state_ = DispatcherState::Dispatching;
+        Http2Stream *stream = ready_head_;
+        remove_ready_stream(*stream);
+        (void)stream->schedule_pending();
+        if (stop_sending_requested_) {
+            dispatcher_state_ = DispatcherState::Stopping;
+            break;
+        }
+        reevaluate_stream(*stream);
+    }
+
+    dispatcher_running_ = false;
+    if (stop_sending_requested_) {
+        drain_pending_entries(stop_sending_reason_);
+    }
+    if (!stop_sending_requested_ && dispatcher_state_ != DispatcherState::Stopping) {
+        dispatcher_state_ = DispatcherState::WaitingForWork;
+    }
+    co_return;
 }
 
 void Http2Connection::start_send_loop() noexcept {
@@ -382,6 +301,16 @@ void Http2Connection::start_send_loop() noexcept {
     writer_running_ = true;
     fiber::async::spawn([this]() -> fiber::async::DetachedTask {
         co_await run_send_loop();
+    });
+}
+
+void Http2Connection::start_dispatch_loop() noexcept {
+    if (dispatcher_running_ || stop_sending_requested_ || !ready_head_) {
+        return;
+    }
+    dispatcher_running_ = true;
+    fiber::async::spawn([this]() -> fiber::async::DetachedTask {
+        co_await run_dispatch_loop();
     });
 }
 
@@ -402,6 +331,9 @@ Http2Connection::SendEntry *Http2Connection::acquire_send_entry() noexcept {
     entry->next = nullptr;
     entry->total_bytes = 0;
     entry->written_bytes = 0;
+    entry->frame_header_size = 0;
+    std::memset(entry->frame_header_, 0, sizeof(entry->frame_header_));
+    entry->logical_bytes = 0;
     entry->result = common::IoErr::None;
     entry->done_notified = false;
     entry->on_done = nullptr;
@@ -418,6 +350,9 @@ void Http2Connection::release_send_entry(SendEntry *entry) noexcept {
     entry->next = nullptr;
     entry->total_bytes = 0;
     entry->written_bytes = 0;
+    entry->frame_header_size = 0;
+    std::memset(entry->frame_header_, 0, sizeof(entry->frame_header_));
+    entry->logical_bytes = 0;
     entry->result = common::IoErr::None;
     entry->done_notified = false;
     entry->on_done = nullptr;
@@ -486,10 +421,21 @@ common::IoErr Http2Connection::enqueue_send_chain(mem::IoBufChain &&bufs, SendEn
     return result;
 }
 
+void Http2Connection::update_connection_send_window(std::int32_t delta) noexcept {
+    conn_send_window_ += delta;
+    refresh_conn_window_wait_list();
+    start_dispatch_loop();
+}
+
+void Http2Connection::update_stream_send_window(Http2Stream &stream, std::int32_t delta) noexcept {
+    stream.update_send_window(delta);
+}
+
 void Http2Connection::stop_sending(common::IoErr reason) noexcept {
     stop_sending_requested_ = true;
     stop_sending_reason_ = reason;
     writer_state_ = WriterState::Stopping;
+    dispatcher_state_ = DispatcherState::Stopping;
 
     if (transport_) {
         transport_->close();
@@ -498,9 +444,19 @@ void Http2Connection::stop_sending(common::IoErr reason) noexcept {
     if (!writer_running_) {
         drain_send_queue(reason);
     }
+    if (!dispatcher_running_) {
+        drain_pending_entries(reason);
+    }
 }
 
 Http2Connection::WriterState Http2Connection::writer_state() const noexcept { return writer_state_; }
+
+Http2Connection::DispatcherState Http2Connection::dispatcher_state() const noexcept { return dispatcher_state_; }
+
+std::size_t Http2Connection::configured_max_active_streams() const noexcept {
+    return static_cast<std::size_t>(options_.max_peer_concurrent_streams) +
+           static_cast<std::size_t>(options_.max_local_push_streams);
+}
 
 common::IoErr Http2Connection::enqueue_send_entry(SendEntry *entry) noexcept {
     if (!entry || !transport_ || !transport_->valid()) {
@@ -568,8 +524,167 @@ void Http2Connection::notify_send_done(SendEntry *entry) noexcept {
 
     entry->done_notified = true;
     if (entry->on_done) {
-        entry->on_done(entry);
+        entry->on_done(entry->user_data, entry->total_bytes, entry->written_bytes, entry->frame_header_size,
+                       entry->logical_bytes, entry->result);
     }
+}
+
+void Http2Connection::drain_pending_entries(common::IoErr result) noexcept {
+    Http2Stream *stream = pending_stream_head_;
+    while (stream) {
+        Http2Stream *next = stream->pending_next_;
+        stream->drain_pending(result);
+        stream = next;
+    }
+}
+
+void Http2Connection::reevaluate_stream(Http2Stream &stream) noexcept {
+    if (!stream.has_pending()) {
+        remove_ready_stream(stream);
+        remove_conn_wait_stream(stream);
+        return;
+    }
+
+    if (stream.pending_kind() == PendingKind::Header) {
+        remove_conn_wait_stream(stream);
+        append_ready_stream(stream);
+        return;
+    }
+
+    if (stream.blocked_by_stream_window()) {
+        remove_ready_stream(stream);
+        remove_conn_wait_stream(stream);
+        return;
+    }
+
+    if (stream.blocked_by_conn_window()) {
+        remove_ready_stream(stream);
+        append_conn_wait_stream(stream);
+        return;
+    }
+
+    remove_conn_wait_stream(stream);
+    append_ready_stream(stream);
+}
+
+void Http2Connection::refresh_conn_window_wait_list() noexcept {
+    Http2Stream *stream = conn_wait_head_;
+    while (stream) {
+        Http2Stream *next = stream->conn_wait_next_;
+        reevaluate_stream(*stream);
+        stream = next;
+    }
+}
+
+void Http2Connection::append_ready_stream(Http2Stream &stream) noexcept {
+    if (stream.in_ready_list_) {
+        return;
+    }
+    stream.ready_prev_ = ready_tail_;
+    stream.ready_next_ = nullptr;
+    if (ready_tail_) {
+        ready_tail_->ready_next_ = &stream;
+    } else {
+        ready_head_ = &stream;
+    }
+    ready_tail_ = &stream;
+    stream.in_ready_list_ = true;
+}
+
+void Http2Connection::remove_ready_stream(Http2Stream &stream) noexcept {
+    if (!stream.in_ready_list_) {
+        return;
+    }
+    if (stream.ready_prev_) {
+        stream.ready_prev_->ready_next_ = stream.ready_next_;
+    } else {
+        ready_head_ = stream.ready_next_;
+    }
+    if (stream.ready_next_) {
+        stream.ready_next_->ready_prev_ = stream.ready_prev_;
+    } else {
+        ready_tail_ = stream.ready_prev_;
+    }
+    stream.ready_prev_ = nullptr;
+    stream.ready_next_ = nullptr;
+    stream.in_ready_list_ = false;
+}
+
+void Http2Connection::append_conn_wait_stream(Http2Stream &stream) noexcept {
+    if (stream.in_conn_window_wait_list_) {
+        return;
+    }
+    stream.conn_wait_prev_ = conn_wait_tail_;
+    stream.conn_wait_next_ = nullptr;
+    if (conn_wait_tail_) {
+        conn_wait_tail_->conn_wait_next_ = &stream;
+    } else {
+        conn_wait_head_ = &stream;
+    }
+    conn_wait_tail_ = &stream;
+    stream.in_conn_window_wait_list_ = true;
+}
+
+void Http2Connection::remove_conn_wait_stream(Http2Stream &stream) noexcept {
+    if (!stream.in_conn_window_wait_list_) {
+        return;
+    }
+    if (stream.conn_wait_prev_) {
+        stream.conn_wait_prev_->conn_wait_next_ = stream.conn_wait_next_;
+    } else {
+        conn_wait_head_ = stream.conn_wait_next_;
+    }
+    if (stream.conn_wait_next_) {
+        stream.conn_wait_next_->conn_wait_prev_ = stream.conn_wait_prev_;
+    } else {
+        conn_wait_tail_ = stream.conn_wait_prev_;
+    }
+    stream.conn_wait_prev_ = nullptr;
+    stream.conn_wait_next_ = nullptr;
+    stream.in_conn_window_wait_list_ = false;
+}
+
+void Http2Connection::register_pending_stream(Http2Stream &stream) noexcept {
+    if (stream.in_pending_registry_) {
+        return;
+    }
+    stream.pending_prev_ = nullptr;
+    stream.pending_next_ = pending_stream_head_;
+    if (pending_stream_head_) {
+        pending_stream_head_->pending_prev_ = &stream;
+    }
+    pending_stream_head_ = &stream;
+    stream.in_pending_registry_ = true;
+}
+
+void Http2Connection::unregister_pending_stream(Http2Stream &stream) noexcept {
+    if (!stream.in_pending_registry_) {
+        return;
+    }
+    if (stream.pending_prev_) {
+        stream.pending_prev_->pending_next_ = stream.pending_next_;
+    } else {
+        pending_stream_head_ = stream.pending_next_;
+    }
+    if (stream.pending_next_) {
+        stream.pending_next_->pending_prev_ = stream.pending_prev_;
+    }
+    stream.pending_prev_ = nullptr;
+    stream.pending_next_ = nullptr;
+    stream.in_pending_registry_ = false;
+}
+
+void Http2Connection::encode_frame_header(std::uint8_t *out, std::uint32_t length, Http2FrameType type,
+                                          std::uint8_t flags, std::uint32_t stream_id) noexcept {
+    out[0] = static_cast<std::uint8_t>((length >> 16) & 0xffU);
+    out[1] = static_cast<std::uint8_t>((length >> 8) & 0xffU);
+    out[2] = static_cast<std::uint8_t>(length & 0xffU);
+    out[3] = static_cast<std::uint8_t>(type);
+    out[4] = flags;
+    out[5] = static_cast<std::uint8_t>((stream_id >> 24) & 0x7fU);
+    out[6] = static_cast<std::uint8_t>((stream_id >> 16) & 0xffU);
+    out[7] = static_cast<std::uint8_t>((stream_id >> 8) & 0xffU);
+    out[8] = static_cast<std::uint8_t>(stream_id & 0xffU);
 }
 
 } // namespace fiber::http

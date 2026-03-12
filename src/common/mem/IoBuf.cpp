@@ -350,6 +350,33 @@ bool IoBufChain::prepend(IoBuf &&buf) noexcept {
     return true;
 }
 
+bool IoBufChain::retain_prefix(std::size_t bytes, IoBufChain &out) const noexcept {
+    FIBER_ASSERT(bytes <= readable_bytes_);
+
+    std::size_t remaining = bytes;
+    for (Node *node = head_; node && remaining > 0; node = node->next) {
+        std::size_t readable = node->buf.readable();
+        if (readable == 0) {
+            continue;
+        }
+
+        std::size_t take = std::min(readable, remaining);
+        IoBuf slice = node->buf.retain_slice(0, take);
+        if (!slice) {
+            out.clear();
+            return false;
+        }
+        if (!out.append(std::move(slice))) {
+            out.clear();
+            return false;
+        }
+        remaining -= take;
+    }
+
+    FIBER_ASSERT(remaining == 0);
+    return true;
+}
+
 void IoBufChain::clear() noexcept {
     delete_nodes(head_);
     head_ = nullptr;
