@@ -450,6 +450,12 @@ public:
         fiber::http::Http2Connection(std::move(transport), options), fake_transport_(fake_transport) {}
 
     fiber::common::IoErr attach_stream(fiber::http::Http2Stream &stream) noexcept { return bind_stream(stream); }
+    fiber::common::IoErr submit_data(fiber::http::Http2Stream &stream, std::string_view data,
+                                     std::uint8_t last_flags = 0) noexcept {
+        SendPayload payload;
+        payload.set_stable_span(reinterpret_cast<const std::uint8_t *>(data.data()), data.size());
+        return stream.enqueue_pending(*this, PendingKind::Data, std::move(payload), 0, last_flags, nullptr, nullptr);
+    }
     [[nodiscard]] std::int32_t current_connection_send_window() const noexcept { return connection_send_window(); }
     [[nodiscard]] std::uint32_t current_peer_max_frame_size() const noexcept { return peer_max_outbound_frame_size(); }
     [[nodiscard]] std::uint32_t current_peer_max_concurrent_streams() const noexcept {
@@ -780,6 +786,41 @@ TEST(Http2ConnectionTest, SettingsFrameUpdatesPeerStateAndSendsAck) {
     EXPECT_EQ(frames[0].flags, 0x1);
     EXPECT_EQ(frames[0].stream_id, 0U);
     EXPECT_TRUE(frames[0].payload.empty());
+}
+
+TEST(Http2ConnectionTest, LowerInitialWindowCanMakeStreamSendWindowNegative) {
+    fiber::http::Http2Connection::Options options;
+    options.expect_peer_preface = false;
+    options.max_frame_size = 32768;
+    options.initial_connection_send_window = 100000;
+
+    std::string payload;
+    payload.push_back('\0');
+    payload.push_back('\x4');
+    payload.push_back('\0');
+    payload.push_back('\0');
+    payload.push_back('\x04');
+    payload.push_back('\0');
+    std::string settings = make_frame(static_cast<std::uint32_t>(payload.size()), 0x4, 0x0, 0, payload);
+    std::string body(70000, 'x');
+
+    ControlRunOutcome outcome = execute_control_connection(
+            {settings},
+            [body](ControlHttp2Connection &connection, fiber::http::Http2Stream &stream1, fiber::http::Http2Stream &) {
+                ASSERT_EQ(connection.submit_data(stream1, body), fiber::common::IoErr::None);
+            },
+            options);
+
+    ASSERT_TRUE(outcome.result.has_value());
+    EXPECT_LT(outcome.stream1_send_window, 0);
+
+    std::vector<EncodedFrame> frames = parse_frames(outcome.written);
+    ASSERT_EQ(frames.size(), 2U) << describe_frames(frames);
+    EXPECT_EQ(frames[0].type, 0x0);
+    EXPECT_EQ(frames[0].length, 32768U);
+    EXPECT_EQ(frames[1].type, 0x4);
+    EXPECT_EQ(frames[1].flags, 0x1);
+    EXPECT_EQ(frames[1].stream_id, 0U);
 }
 
 TEST(Http2ConnectionTest, PingFrameRepliesWithAckAndSamePayload) {

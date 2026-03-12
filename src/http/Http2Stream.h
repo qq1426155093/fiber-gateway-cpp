@@ -51,6 +51,9 @@ public:
     [[nodiscard]] bool blocked_by_stream_window() const noexcept;
     [[nodiscard]] bool blocked_by_conn_window() const noexcept;
     [[nodiscard]] ScheduleResult schedule_pending() noexcept;
+    // Peer SETTINGS_INITIAL_WINDOW_SIZE can shrink after we have already
+    // reserved/sent DATA on this stream, so the per-stream send window is
+    // allowed to become negative until future WINDOW_UPDATE frames restore it.
     void update_send_window(std::int32_t delta) noexcept;
     void drain_pending(common::IoErr result) noexcept;
     void close(common::IoErr result = common::IoErr::Canceled) noexcept;
@@ -70,6 +73,8 @@ private:
     State state_ = State::Idle;
     bool active_ = false;
     Http2Connection *conn_ = nullptr;
+    // RFC 7540 allows the stream-level send window to become negative after a
+    // smaller SETTINGS_INITIAL_WINDOW_SIZE is applied to in-flight streams.
     std::int32_t send_window_ = 65535;
     Http2Stream *active_prev_ = nullptr;
     Http2Stream *active_next_ = nullptr;
