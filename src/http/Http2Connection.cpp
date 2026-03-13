@@ -30,6 +30,7 @@ constexpr std::uint32_t kDefaultHeaderTableSize = 4096;
 constexpr std::uint32_t kDefaultMaxFrameSize = 16384;
 constexpr std::uint32_t kMaxFrameSizeLimit = 16777215;
 constexpr std::int64_t kMaxFlowControlWindow = 0x7fffffffLL;
+constexpr std::int32_t kInitialFlowControlWindow = 65535;
 
 enum class ParsePhase : std::uint8_t {
     Preface,
@@ -54,6 +55,20 @@ std::uint32_t parse_u32(const std::uint8_t *pos) noexcept {
 
 std::uint16_t parse_u16(const std::uint8_t *pos) noexcept {
     return (static_cast<std::uint16_t>(pos[0]) << 8) | static_cast<std::uint16_t>(pos[1]);
+}
+
+std::uint8_t *append_u16(std::uint8_t *out, std::uint16_t value) noexcept {
+    out[0] = static_cast<std::uint8_t>((value >> 8) & 0xffU);
+    out[1] = static_cast<std::uint8_t>(value & 0xffU);
+    return out + 2;
+}
+
+std::uint8_t *append_u32(std::uint8_t *out, std::uint32_t value) noexcept {
+    out[0] = static_cast<std::uint8_t>((value >> 24) & 0xffU);
+    out[1] = static_cast<std::uint8_t>((value >> 16) & 0xffU);
+    out[2] = static_cast<std::uint8_t>((value >> 8) & 0xffU);
+    out[3] = static_cast<std::uint8_t>(value & 0xffU);
+    return out + 4;
 }
 
 common::IoErr prepare_read_buffer(mem::IoBuf &read_buf, std::size_t capacity) noexcept {
@@ -125,6 +140,13 @@ fiber::async::Task<Http2Connection::RunResult> Http2Connection::run() noexcept {
         co_return std::unexpected(common::IoErr::Invalid);
     }
 
+    if (!options_.expect_peer_preface && options_.auto_start_connection_preface && !local_connection_preface_sent_) {
+        common::IoErr err = send_client_connection_preface();
+        if (err != common::IoErr::None) {
+            co_return std::unexpected(err);
+        }
+    }
+
     std::size_t read_buffer_capacity = std::max(options_.read_buffer_size, kClientPreface.size());
     mem::IoBuf read_buf = mem::IoBuf::allocate(read_buffer_capacity);
     if (!read_buf) {
@@ -146,6 +168,12 @@ fiber::async::Task<Http2Connection::RunResult> Http2Connection::run() noexcept {
                     co_return std::unexpected(common::IoErr::Invalid);
                 }
                 read_buf.consume(kClientPreface.size());
+                if (options_.auto_start_connection_preface && !local_connection_preface_sent_) {
+                    common::IoErr err = send_server_connection_preface();
+                    if (err != common::IoErr::None) {
+                        co_return std::unexpected(err);
+                    }
+                }
                 phase = ParsePhase::FrameHeader;
                 continue;
             }
@@ -251,6 +279,7 @@ common::IoErr Http2Connection::handle_settings_payload(const FrameHeader &fhr, c
             if (fhr.length != 0) {
                 return common::IoErr::Invalid;
             }
+            local_settings_acknowledged_ = true;
             return common::IoErr::None;
         }
         if ((fhr.length % kSettingsParameterSize) != 0) {
@@ -472,12 +501,107 @@ common::IoErr Http2Connection::send_control_frame(Http2FrameType type, std::uint
     return enqueue_send_buf(std::move(buf), nullptr);
 }
 
+common::IoErr Http2Connection::send_client_connection_preface() noexcept {
+    constexpr std::size_t kSettingsCount = 3;
+    constexpr std::size_t kSettingsPayloadSize = kSettingsCount * kSettingsParameterSize;
+    bool send_conn_window_update = options_.initial_connection_recv_window > static_cast<std::uint32_t>(kInitialFlowControlWindow);
+    std::size_t total_size = kClientPreface.size() + kFrameHeaderSize + kSettingsPayloadSize;
+    if (send_conn_window_update) {
+        total_size += kFrameHeaderSize + kWindowUpdatePayloadSize;
+    }
+
+    mem::IoBuf buf = mem::IoBuf::allocate(total_size);
+    if (!buf) {
+        return common::IoErr::NoMem;
+    }
+    std::uint8_t *out = buf.writable_data();
+
+    std::memcpy(out, kClientPreface.data(), kClientPreface.size());
+    out += kClientPreface.size();
+    encode_frame_header(out, static_cast<std::uint32_t>(kSettingsPayloadSize), Http2FrameType::Settings, 0, 0);
+    out += kFrameHeaderSize;
+    out = append_u16(out, kSettingsMaxConcurrentStreams);
+    out = append_u32(out, options_.local_max_concurrent_streams);
+    out = append_u16(out, kSettingsInitialWindowSize);
+    out = append_u32(out, static_cast<std::uint32_t>(options_.initial_stream_send_window));
+    out = append_u16(out, kSettingsMaxFrameSize);
+    out = append_u32(out, options_.max_frame_size);
+
+    if (send_conn_window_update) {
+        std::uint32_t increment = options_.initial_connection_recv_window - static_cast<std::uint32_t>(kInitialFlowControlWindow);
+        encode_frame_header(out, kWindowUpdatePayloadSize, Http2FrameType::WindowUpdate, 0, 0);
+        out += kFrameHeaderSize;
+        out = append_u32(out, increment & 0x7fffffffU);
+    }
+    buf.commit(static_cast<std::size_t>(out - buf.writable_data()));
+
+    common::IoErr err = enqueue_send_buf(std::move(buf), nullptr);
+    if (err == common::IoErr::None) {
+        local_connection_preface_sent_ = true;
+        local_settings_acknowledged_ = false;
+    }
+    return err;
+}
+
+common::IoErr Http2Connection::send_server_connection_preface() noexcept {
+    constexpr std::size_t kSettingsCount = 3;
+    constexpr std::size_t kSettingsPayloadSize = kSettingsCount * kSettingsParameterSize;
+    bool send_conn_window_update = options_.initial_connection_recv_window > static_cast<std::uint32_t>(kInitialFlowControlWindow);
+    std::size_t total_size = kFrameHeaderSize + kSettingsPayloadSize;
+    if (send_conn_window_update) {
+        total_size += kFrameHeaderSize + kWindowUpdatePayloadSize;
+    }
+
+    mem::IoBuf buf = mem::IoBuf::allocate(total_size);
+    if (!buf) {
+        return common::IoErr::NoMem;
+    }
+    std::uint8_t *out = buf.writable_data();
+
+    encode_frame_header(out, static_cast<std::uint32_t>(kSettingsPayloadSize), Http2FrameType::Settings, 0, 0);
+    out += kFrameHeaderSize;
+    out = append_u16(out, kSettingsMaxConcurrentStreams);
+    out = append_u32(out, options_.local_max_concurrent_streams);
+    out = append_u16(out, kSettingsInitialWindowSize);
+    out = append_u32(out, static_cast<std::uint32_t>(options_.initial_stream_send_window));
+    out = append_u16(out, kSettingsMaxFrameSize);
+    out = append_u32(out, options_.max_frame_size);
+
+    if (send_conn_window_update) {
+        std::uint32_t increment = options_.initial_connection_recv_window - static_cast<std::uint32_t>(kInitialFlowControlWindow);
+        encode_frame_header(out, kWindowUpdatePayloadSize, Http2FrameType::WindowUpdate, 0, 0);
+        out += kFrameHeaderSize;
+        out = append_u32(out, increment & 0x7fffffffU);
+    }
+    buf.commit(static_cast<std::size_t>(out - buf.writable_data()));
+
+    common::IoErr err = enqueue_send_buf(std::move(buf), nullptr);
+    if (err == common::IoErr::None) {
+        local_connection_preface_sent_ = true;
+        local_settings_acknowledged_ = false;
+    }
+    return err;
+}
+
 common::IoErr Http2Connection::send_settings_ack() noexcept {
     return send_control_frame(Http2FrameType::Settings, kFlagSettingsAck, 0, nullptr, 0);
 }
 
 common::IoErr Http2Connection::send_ping_ack(const std::uint8_t *opaque_data) noexcept {
     return send_control_frame(Http2FrameType::Ping, kFlagAck, 0, opaque_data, kPingPayloadSize);
+}
+
+common::IoErr Http2Connection::send_window_update(std::uint32_t stream_id, std::uint32_t increment) noexcept {
+    if (increment == 0 || increment > static_cast<std::uint32_t>(kMaxFlowControlWindow)) {
+        return common::IoErr::Invalid;
+    }
+
+    std::uint8_t payload[kWindowUpdatePayloadSize];
+    payload[0] = static_cast<std::uint8_t>((increment >> 24) & 0x7fU);
+    payload[1] = static_cast<std::uint8_t>((increment >> 16) & 0xffU);
+    payload[2] = static_cast<std::uint8_t>((increment >> 8) & 0xffU);
+    payload[3] = static_cast<std::uint8_t>(increment & 0xffU);
+    return send_control_frame(Http2FrameType::WindowUpdate, 0, stream_id, payload, sizeof(payload));
 }
 
 common::IoErr Http2Connection::send_rst_stream(std::uint32_t stream_id, Http2ErrorCode error_code) noexcept {

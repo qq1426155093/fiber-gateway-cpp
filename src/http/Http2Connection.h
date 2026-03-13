@@ -43,10 +43,13 @@ public:
         std::size_t max_free_send_entries = 64;
         std::size_t max_free_pending_entries = 64;
         std::uint32_t max_peer_concurrent_streams = 100;
+        std::uint32_t local_max_concurrent_streams = 128;
         std::uint32_t max_local_push_streams = 0;
+        std::uint32_t initial_connection_recv_window = 0x7fffffffU;
         std::int32_t initial_connection_send_window = 65535;
         std::int32_t initial_stream_send_window = 65535;
         bool expect_peer_preface = true;
+        bool auto_start_connection_preface = true;
     };
 
     enum class WriterState : std::uint8_t {
@@ -129,8 +132,11 @@ private:
     common::IoErr apply_peer_initial_stream_window(std::uint32_t value) noexcept;
     common::IoErr send_control_frame(Http2FrameType type, std::uint8_t flags, std::uint32_t stream_id,
                                      const std::uint8_t *payload, std::size_t length) noexcept;
+    common::IoErr send_client_connection_preface() noexcept;
+    common::IoErr send_server_connection_preface() noexcept;
     common::IoErr send_settings_ack() noexcept;
     common::IoErr send_ping_ack(const std::uint8_t *opaque_data) noexcept;
+    common::IoErr send_window_update(std::uint32_t stream_id, std::uint32_t increment) noexcept;
     common::IoErr send_rst_stream(std::uint32_t stream_id, Http2ErrorCode error_code) noexcept;
     void handle_stream_error(std::uint32_t stream_id, Http2ErrorCode error_code,
                              common::IoErr pending_result = common::IoErr::Canceled) noexcept;
@@ -165,6 +171,8 @@ private:
     std::uint32_t peer_max_outbound_frame_size_ = 16384;
     std::uint32_t peer_max_header_list_size_ = 0xffffffffU;
     bool peer_enable_push_ = true;
+    bool local_connection_preface_sent_ = false;
+    bool local_settings_acknowledged_ = false;
     std::array<std::uint8_t, 8> control_payload_scratch_{};
     std::size_t control_payload_used_ = 0;
     std::array<std::uint8_t, 6> settings_scratch_{};

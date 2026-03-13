@@ -25,6 +25,8 @@ namespace {
 
 using fiber::async::DetachedTask;
 
+constexpr std::string_view kClientConnectionPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+
 class FakeHttpTransport final : public fiber::http::HttpTransport {
 public:
     explicit FakeHttpTransport(std::vector<std::string> chunks, std::vector<size_t> write_steps = {}) :
@@ -583,7 +585,9 @@ PendingOutcome execute_pending_connection(PendingScript submit, std::size_t expe
 }
 
 DetachedTask run_control_connection(std::shared_ptr<std::promise<ControlRunOutcome>> promise, std::vector<std::string> chunks,
-                                    ControlScript setup, fiber::http::Http2Connection::Options options = {}) {
+                                    ControlScript setup, fiber::http::Http2Connection::Options options = {},
+                                    bool auto_start_connection_preface = false) {
+    options.auto_start_connection_preface = auto_start_connection_preface;
     auto transport = std::make_unique<FakeHttpTransport>(std::move(chunks));
     auto *fake_transport = transport.get();
     ControlHttp2Connection connection(std::move(transport), fake_transport, options);
@@ -615,15 +619,17 @@ DetachedTask run_control_connection(std::shared_ptr<std::promise<ControlRunOutco
 }
 
 ControlRunOutcome execute_control_connection(std::vector<std::string> chunks, ControlScript setup = {},
-                                             fiber::http::Http2Connection::Options options = {}) {
+                                             fiber::http::Http2Connection::Options options = {},
+                                             bool auto_start_connection_preface = false) {
     fiber::event::EventLoopGroup group(1);
     auto promise = std::make_shared<std::promise<ControlRunOutcome>>();
     auto future = promise->get_future();
 
     group.start();
     fiber::async::spawn(group.at(0), [promise = std::move(promise), chunks = std::move(chunks), setup = std::move(setup),
-                                      options]() mutable {
-        return run_control_connection(std::move(promise), std::move(chunks), std::move(setup), options);
+                                      options, auto_start_connection_preface]() mutable {
+        return run_control_connection(std::move(promise), std::move(chunks), std::move(setup), options,
+                                      auto_start_connection_preface);
     });
 
     auto status = future.wait_for(std::chrono::seconds(2));
@@ -908,6 +914,62 @@ TEST(Http2ConnectionTest, RejectsInvalidPingLengthAsConnectionError) {
 
     ASSERT_FALSE(outcome.result.has_value());
     EXPECT_EQ(outcome.result.error(), fiber::common::IoErr::Invalid);
+}
+
+TEST(Http2ConnectionTest, ClientConnectionPrefaceSendsPrefaceSettingsAndWindowUpdate) {
+    fiber::http::Http2Connection::Options options;
+    options.expect_peer_preface = false;
+    options.max_frame_size = 0x00ffffffU;
+    options.local_max_concurrent_streams = 128;
+    options.initial_stream_send_window = 65535;
+    options.initial_connection_recv_window = 0x7fffffffU;
+
+    ControlRunOutcome outcome = execute_control_connection({}, {}, options, true);
+
+    ASSERT_TRUE(outcome.result.has_value());
+    ASSERT_GE(outcome.written.size(), kClientConnectionPreface.size());
+    EXPECT_EQ(outcome.written.substr(0, kClientConnectionPreface.size()), kClientConnectionPreface);
+
+    std::string_view frames_view(outcome.written.data() + kClientConnectionPreface.size(),
+                                 outcome.written.size() - kClientConnectionPreface.size());
+    std::vector<EncodedFrame> frames = parse_frames(frames_view);
+    ASSERT_EQ(frames.size(), 2U) << describe_frames(frames);
+    EXPECT_EQ(frames[0].type, 0x4);
+    EXPECT_EQ(frames[0].flags, 0x0);
+    EXPECT_EQ(frames[0].stream_id, 0U);
+    EXPECT_EQ(frames[0].length, 18U);
+    EXPECT_EQ(frames[1].type, 0x8);
+    EXPECT_EQ(frames[1].stream_id, 0U);
+    EXPECT_EQ(frames[1].length, 4U);
+
+    ASSERT_EQ(frames[1].payload.size(), 4U);
+    std::uint32_t increment = (static_cast<std::uint32_t>(static_cast<std::uint8_t>(frames[1].payload[0]) & 0x7fU) << 24) |
+                              (static_cast<std::uint32_t>(static_cast<std::uint8_t>(frames[1].payload[1])) << 16) |
+                              (static_cast<std::uint32_t>(static_cast<std::uint8_t>(frames[1].payload[2])) << 8) |
+                              static_cast<std::uint32_t>(static_cast<std::uint8_t>(frames[1].payload[3]));
+    EXPECT_EQ(increment, 0x7fffffffU - 65535U);
+}
+
+TEST(Http2ConnectionTest, ServerConnectionPrefaceSendsSettingsAndWindowUpdateAfterPeerPreface) {
+    fiber::http::Http2Connection::Options options;
+    options.expect_peer_preface = true;
+    options.max_frame_size = 0x00ffffffU;
+    options.local_max_concurrent_streams = 128;
+    options.initial_stream_send_window = 65535;
+    options.initial_connection_recv_window = 0x7fffffffU;
+
+    ControlRunOutcome outcome = execute_control_connection({std::string(kClientConnectionPreface)}, {}, options, true);
+
+    ASSERT_TRUE(outcome.result.has_value());
+    std::vector<EncodedFrame> frames = parse_frames(outcome.written);
+    ASSERT_EQ(frames.size(), 2U) << describe_frames(frames);
+    EXPECT_EQ(frames[0].type, 0x4);
+    EXPECT_EQ(frames[0].flags, 0x0);
+    EXPECT_EQ(frames[0].stream_id, 0U);
+    EXPECT_EQ(frames[0].length, 18U);
+    EXPECT_EQ(frames[1].type, 0x8);
+    EXPECT_EQ(frames[1].stream_id, 0U);
+    EXPECT_EQ(frames[1].length, 4U);
 }
 
 TEST(Http2ConnectionTest, SendsStableSpanAcrossPartialWrites) {
