@@ -42,6 +42,19 @@ struct Http2FrameHeader {
     std::uint32_t stream_id = 0;
 };
 
+inline void encode_http2_frame_header(std::uint8_t *out, std::uint32_t length, Http2FrameType type,
+                                      std::uint8_t flags, std::uint32_t stream_id) noexcept {
+    out[0] = static_cast<std::uint8_t>((length >> 16) & 0xffU);
+    out[1] = static_cast<std::uint8_t>((length >> 8) & 0xffU);
+    out[2] = static_cast<std::uint8_t>(length & 0xffU);
+    out[3] = static_cast<std::uint8_t>(type);
+    out[4] = flags;
+    out[5] = static_cast<std::uint8_t>((stream_id >> 24) & 0x7fU);
+    out[6] = static_cast<std::uint8_t>((stream_id >> 16) & 0xffU);
+    out[7] = static_cast<std::uint8_t>((stream_id >> 8) & 0xffU);
+    out[8] = static_cast<std::uint8_t>(stream_id & 0xffU);
+}
+
 } // namespace fiber::http
 
 #endif // FIBER_HTTP_HTTP2_PROTOCOL_H

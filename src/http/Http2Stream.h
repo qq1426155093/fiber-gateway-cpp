@@ -7,7 +7,9 @@
 #include "../common/IoError.h"
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
+#include "../common/mem/IoBuf.h"
 #include "Http2Pending.h"
+#include "Http2Protocol.h"
 
 namespace fiber::http {
 
@@ -23,6 +25,17 @@ public:
         HalfClosedLocal,
         HalfClosedRemote,
         Closed,
+    };
+
+    enum class StreamOp : std::uint8_t {
+        RecvHeaders = 0,
+        RecvHeadersEndStream,
+        RecvData,
+        RecvDataEndStream,
+        SendHeaders,
+        SendHeadersEndStream,
+        SendData,
+        SendDataEndStream,
     };
 
     explicit Http2Stream(std::uint32_t stream_id) noexcept : stream_id_(stream_id) {}
@@ -42,8 +55,7 @@ public:
     [[nodiscard]] bool active() const noexcept { return active_; }
     void set_active(bool active) noexcept { active_ = active; }
 
-    common::IoErr enqueue_pending(Http2Connection &conn, Http2PendingKind kind, Http2SendPayload &&payload,
-                                  std::uint8_t first_frame_flags = 0,
+    common::IoErr enqueue_pending(Http2PendingKind kind, Http2SendPayload &&payload, std::uint8_t first_frame_flags = 0,
                                   std::uint8_t last_frame_flags = 0, Http2PendingEntry::ChangeFn on_change = nullptr,
                                   void *user_ctx = nullptr) noexcept;
     [[nodiscard]] bool has_pending() const noexcept { return pending_head_ != nullptr; }
@@ -51,6 +63,14 @@ public:
     [[nodiscard]] bool blocked_by_stream_window() const noexcept;
     [[nodiscard]] bool blocked_by_conn_window() const noexcept;
     [[nodiscard]] ScheduleResult schedule_pending() noexcept;
+    common::IoErr on_header_recv(const mem::IoBuf &payload, std::size_t block_offset, std::size_t length,
+                                 bool end_headers, bool end_stream) noexcept;
+    common::IoErr on_data_recv(const mem::IoBuf &payload, std::size_t data_offset, std::size_t length,
+                               bool end_stream) noexcept;
+    void on_remote_rst(Http2ErrorCode code, common::IoErr result = common::IoErr::Canceled) noexcept;
+    common::IoErr send_header(Http2SendPayload &&payload, bool end_stream) noexcept;
+    common::IoErr send_data(Http2SendPayload &&payload, bool end_stream) noexcept;
+    common::IoErr close_rst(Http2ErrorCode code, common::IoErr result = common::IoErr::Canceled) noexcept;
     // Peer SETTINGS_INITIAL_WINDOW_SIZE can shrink after we have already
     // reserved/sent DATA on this stream, so the per-stream send window is
     // allowed to become negative until future WINDOW_UPDATE frames restore it.
@@ -59,6 +79,13 @@ public:
     void close(common::IoErr result = common::IoErr::Canceled) noexcept;
 
 private:
+    common::IoErr transition_on_recv_headers(bool end_stream) noexcept;
+    common::IoErr transition_on_recv_data(bool end_stream) noexcept;
+    common::IoErr transition_on_send_headers(bool end_stream) noexcept;
+    common::IoErr transition_on_send_data(bool end_stream) noexcept;
+    [[nodiscard]] static bool is_valid_transition(State state, StreamOp op) noexcept;
+    void transition_on_remote_end_stream() noexcept;
+    void transition_on_local_end_stream() noexcept;
     void append_active_pending(Http2PendingEntry &entry) noexcept;
     void remove_active_pending(Http2PendingEntry &entry) noexcept;
     void pop_pending_head() noexcept;
@@ -84,6 +111,8 @@ private:
     Http2Stream *conn_wait_prev_ = nullptr;
     Http2Stream *conn_wait_next_ = nullptr;
     bool in_conn_window_wait_list_ = false;
+    bool connection_owned_ = false;
+    Http2Stream *owned_next_ = nullptr;
 
     friend class Http2Connection;
 };
