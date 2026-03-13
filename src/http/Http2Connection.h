@@ -10,6 +10,7 @@
 #include <memory>
 
 #include "../async/Task.h"
+#include "../common/IntrusiveList.h"
 #include "../common/IoError.h"
 #include "../common/NonCopyable.h"
 #include "../common/NonMovable.h"
@@ -146,8 +147,6 @@ private:
     void drain_send_queue(common::IoErr result) noexcept;
     void notify_send_done(SendEntry *entry) noexcept;
     void close_all_streams(common::IoErr result) noexcept;
-    void append_conn_wait_stream(Http2Stream &stream) noexcept;
-    void remove_conn_wait_stream(Http2Stream &stream) noexcept;
 
     std::unique_ptr<HttpTransport> transport_;
     Options options_;
@@ -180,8 +179,7 @@ private:
     Http2PendingPool pending_pool_;
     Http2SendingEntryQueue send_queue_;
     Http2Stream *owned_stream_head_ = nullptr;
-    Http2Stream *conn_wait_head_ = nullptr;
-    Http2Stream *conn_wait_tail_ = nullptr;
+    common::IntrusiveList<Http2Stream, offsetof(Http2Stream, conn_wait_hook_)> conn_wait_streams_;
     bool run_started_ = false;
     bool send_loop_running_ = false;
     bool stop_sending_requested_ = false;

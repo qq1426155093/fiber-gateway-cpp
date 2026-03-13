@@ -915,7 +915,7 @@ Http2Stream *Http2Connection::create_local_stream(std::uint32_t stream_id) noexc
 }
 
 void Http2Connection::erase_stream(Http2Stream &stream) noexcept {
-    remove_conn_wait_stream(stream);
+    stream.remove_from_conn_window_wait_list();
     (void)streams_.erase(stream.stream_id_);
     stream.conn_ = nullptr;
     stream.active_ = false;
@@ -1212,57 +1212,19 @@ void Http2Connection::drain_conn_blocked_streams() noexcept {
     bool progress = false;
     do {
         progress = false;
-        Http2Stream *stream = conn_wait_head_;
+        Http2Stream *stream = conn_wait_streams_.front();
         while (stream) {
-            Http2Stream *next = stream->conn_wait_next_;
-            remove_conn_wait_stream(*stream);
+            Http2Stream *next = conn_wait_streams_.next_of(*stream);
             Http2Stream::ScheduleResult result = stream->schedule_pending();
             if (result == Http2Stream::ScheduleResult::Scheduled) {
                 progress = true;
-            }
-            if (stream->blocked_by_conn_window()) {
-                append_conn_wait_stream(*stream);
             }
             stream = next;
             if (stop_sending_requested_ || conn_send_window_ <= 0) {
                 break;
             }
         }
-    } while (progress && conn_send_window_ > 0 && conn_wait_head_);
-}
-
-void Http2Connection::append_conn_wait_stream(Http2Stream &stream) noexcept {
-    if (stream.in_conn_window_wait_list_) {
-        return;
-    }
-    stream.conn_wait_prev_ = conn_wait_tail_;
-    stream.conn_wait_next_ = nullptr;
-    if (conn_wait_tail_) {
-        conn_wait_tail_->conn_wait_next_ = &stream;
-    } else {
-        conn_wait_head_ = &stream;
-    }
-    conn_wait_tail_ = &stream;
-    stream.in_conn_window_wait_list_ = true;
-}
-
-void Http2Connection::remove_conn_wait_stream(Http2Stream &stream) noexcept {
-    if (!stream.in_conn_window_wait_list_) {
-        return;
-    }
-    if (stream.conn_wait_prev_) {
-        stream.conn_wait_prev_->conn_wait_next_ = stream.conn_wait_next_;
-    } else {
-        conn_wait_head_ = stream.conn_wait_next_;
-    }
-    if (stream.conn_wait_next_) {
-        stream.conn_wait_next_->conn_wait_prev_ = stream.conn_wait_prev_;
-    } else {
-        conn_wait_tail_ = stream.conn_wait_prev_;
-    }
-    stream.conn_wait_prev_ = nullptr;
-    stream.conn_wait_next_ = nullptr;
-    stream.in_conn_window_wait_list_ = false;
+    } while (progress && conn_send_window_ > 0 && !conn_wait_streams_.empty());
 }
 
 } // namespace fiber::http

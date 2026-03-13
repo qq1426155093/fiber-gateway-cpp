@@ -4,9 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "../common/IntrusiveList.h"
 #include "../common/IoError.h"
-#include "../common/NonCopyable.h"
-#include "../common/NonMovable.h"
 #include "../common/mem/IoBuf.h"
 #include "Http2Pending.h"
 #include "Http2Protocol.h"
@@ -15,8 +14,13 @@ namespace fiber::http {
 
 class Http2Connection;
 
-class Http2Stream : public common::NonCopyable, public common::NonMovable {
+class Http2Stream {
 public:
+    Http2Stream(const Http2Stream &) = delete;
+    Http2Stream &operator=(const Http2Stream &) = delete;
+    Http2Stream(Http2Stream &&) = delete;
+    Http2Stream &operator=(Http2Stream &&) = delete;
+
     enum class State : std::uint8_t {
         Idle,
         ReservedLocal,
@@ -91,6 +95,8 @@ private:
     void pop_pending_head() noexcept;
     void maybe_finish_pending(Http2PendingEntry &entry) noexcept;
     void finish_pending(Http2PendingEntry &entry, common::IoErr result) noexcept;
+    void sync_conn_window_wait_membership() noexcept;
+    void remove_from_conn_window_wait_list() noexcept;
     void try_schedule_pending() noexcept;
     static void handle_send_done(void *user_data, std::size_t total_bytes, std::size_t written_bytes,
                                  std::size_t frame_header_size, std::size_t logical_bytes,
@@ -103,14 +109,12 @@ private:
     // RFC 7540 allows the stream-level send window to become negative after a
     // smaller SETTINGS_INITIAL_WINDOW_SIZE is applied to in-flight streams.
     std::int32_t send_window_ = 65535;
+    common::IntrusiveListHook conn_wait_hook_{};
     Http2Stream *active_prev_ = nullptr;
     Http2Stream *active_next_ = nullptr;
     Http2PendingEntry *pending_head_ = nullptr;
     Http2PendingEntry *pending_tail_ = nullptr;
     Http2PendingEntry *active_pending_head_ = nullptr;
-    Http2Stream *conn_wait_prev_ = nullptr;
-    Http2Stream *conn_wait_next_ = nullptr;
-    bool in_conn_window_wait_list_ = false;
     bool connection_owned_ = false;
     Http2Stream *owned_next_ = nullptr;
 

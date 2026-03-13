@@ -152,20 +152,28 @@ bool Http2Stream::blocked_by_conn_window() const noexcept {
 }
 
 Http2Stream::ScheduleResult Http2Stream::schedule_pending() noexcept {
-    if (!conn_ || !pending_head_) {
+    if (!conn_) {
+        return ScheduleResult::NoPending;
+    }
+    if (!pending_head_) {
+        sync_conn_window_wait_membership();
         return ScheduleResult::NoPending;
     }
 
     Http2PendingEntry *entry = pending_head_;
     bool scheduled_any = false;
+    auto finish = [this](ScheduleResult result) noexcept {
+        sync_conn_window_wait_membership();
+        return result;
+    };
 
     for (;;) {
         if (entry->kind == Http2PendingKind::Data) {
             if (send_window_ <= 0) {
-                return scheduled_any ? ScheduleResult::Scheduled : ScheduleResult::BlockedByStreamWindow;
+                return finish(scheduled_any ? ScheduleResult::Scheduled : ScheduleResult::BlockedByStreamWindow);
             }
             if (conn_->conn_send_window_ <= 0) {
-                return scheduled_any ? ScheduleResult::Scheduled : ScheduleResult::BlockedByConnWindow;
+                return finish(scheduled_any ? ScheduleResult::Scheduled : ScheduleResult::BlockedByConnWindow);
             }
         }
 
@@ -173,7 +181,7 @@ Http2Stream::ScheduleResult Http2Stream::schedule_pending() noexcept {
         if (remaining == 0) {
             pop_pending_head();
             maybe_finish_pending(*entry);
-            return scheduled_any ? ScheduleResult::Scheduled : ScheduleResult::NoPending;
+            return finish(scheduled_any ? ScheduleResult::Scheduled : ScheduleResult::NoPending);
         }
 
         bool first_fragment = remaining == entry->total_bytes;
@@ -183,22 +191,22 @@ Http2Stream::ScheduleResult Http2Stream::schedule_pending() noexcept {
             payload_bytes = std::min<std::size_t>(payload_bytes, static_cast<std::size_t>(send_window_));
         }
         if (payload_bytes == 0) {
-            return scheduled_any ? ScheduleResult::Scheduled
-                                 : (entry->kind == Http2PendingKind::Data ? ScheduleResult::BlockedByConnWindow
-                                                                          : ScheduleResult::NoPending);
+            return finish(scheduled_any ? ScheduleResult::Scheduled
+                                        : (entry->kind == Http2PendingKind::Data ? ScheduleResult::BlockedByConnWindow
+                                                                                 : ScheduleResult::NoPending));
         }
 
         Http2Connection::SendEntry *send = conn_->acquire_send_entry();
         if (!send) {
             conn_->stop_sending(common::IoErr::NoMem);
-            return ScheduleResult::NoPending;
+            return finish(ScheduleResult::NoPending);
         }
 
         Http2SendPayload chunk;
         if (!entry->payload.split_prefix_to(payload_bytes, chunk)) {
             conn_->release_send_entry(send);
             conn_->stop_sending(common::IoErr::NoMem);
-            return ScheduleResult::NoPending;
+            return finish(ScheduleResult::NoPending);
         }
 
         Http2FrameType frame_type = Http2FrameType::Data;
@@ -233,7 +241,7 @@ Http2Stream::ScheduleResult Http2Stream::schedule_pending() noexcept {
             send->logical_bytes = 0;
             conn_->release_send_entry(send);
             conn_->stop_sending(err);
-            return ScheduleResult::NoPending;
+            return finish(ScheduleResult::NoPending);
         }
 
         if (entry->kind == Http2PendingKind::Data) {
@@ -250,17 +258,17 @@ Http2Stream::ScheduleResult Http2Stream::schedule_pending() noexcept {
             if (entry->kind == Http2PendingKind::Header) {
                 entry = pending_head_;
                 if (!entry) {
-                    return ScheduleResult::Scheduled;
+                    return finish(ScheduleResult::Scheduled);
                 }
                 continue;
             }
-            return ScheduleResult::Scheduled;
+            return finish(ScheduleResult::Scheduled);
         }
 
         if (entry->kind == Http2PendingKind::Header) {
             continue;
         }
-        return ScheduleResult::Scheduled;
+        return finish(ScheduleResult::Scheduled);
     }
 }
 
@@ -369,9 +377,7 @@ void Http2Stream::drain_pending(common::IoErr result) noexcept {
 void Http2Stream::close(common::IoErr result) noexcept {
     state_ = State::Closed;
     active_ = false;
-    if (conn_) {
-        conn_->remove_conn_wait_stream(*this);
-    }
+    remove_from_conn_window_wait_list();
     pending_head_ = nullptr;
     pending_tail_ = nullptr;
     drain_pending(result);
@@ -443,17 +449,29 @@ void Http2Stream::finish_pending(Http2PendingEntry &entry, common::IoErr result)
     conn_->maybe_destroy_stream(*this);
 }
 
+void Http2Stream::sync_conn_window_wait_membership() noexcept {
+    if (!conn_) {
+        return;
+    }
+    if (blocked_by_conn_window()) {
+        conn_->conn_wait_streams_.push_back(*this);
+        return;
+    }
+    conn_->conn_wait_streams_.erase(*this);
+}
+
+void Http2Stream::remove_from_conn_window_wait_list() noexcept {
+    if (!conn_) {
+        return;
+    }
+    conn_->conn_wait_streams_.erase(*this);
+}
+
 void Http2Stream::try_schedule_pending() noexcept {
     if (!conn_ || conn_->stop_sending_requested_ || state_ == State::Closed) {
         return;
     }
-
-    ScheduleResult result = schedule_pending();
-    if (result == ScheduleResult::BlockedByConnWindow) {
-        conn_->append_conn_wait_stream(*this);
-    } else {
-        conn_->remove_conn_wait_stream(*this);
-    }
+    (void)schedule_pending();
 }
 
 void Http2Stream::handle_send_done(void *user_data, std::size_t, std::size_t written_bytes, std::size_t frame_header_size,
