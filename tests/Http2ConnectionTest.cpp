@@ -291,6 +291,7 @@ std::string describe_frames(const std::vector<EncodedFrame> &frames) {
 DetachedTask run_http2_connection(std::shared_ptr<std::promise<RunOutcome>> promise, std::vector<std::string> chunks,
                                   fiber::http::Http2Connection::Options options,
                                   fiber::common::IoErr payload_error = fiber::common::IoErr::None) {
+    options.auto_start_connection_preface = false;
     auto transport = std::make_unique<FakeHttpTransport>(std::move(chunks));
     RecordingHttp2Connection connection(std::move(transport), options);
     connection.set_payload_error(payload_error);
@@ -676,6 +677,7 @@ TEST(Http2ConnectionTest, ReportsPayloadChunksWithFrameOffsets) {
 
 TEST(Http2ConnectionTest, AllowsClientsToParseFramesWithoutPeerPreface) {
     fiber::http::Http2Connection::Options options;
+    options.role = fiber::http::Http2Connection::ConnectionRole::Client;
     options.expect_peer_preface = false;
 
     std::string data = make_frame(4, 0x0, 0x1, 1, "pong");
@@ -691,6 +693,7 @@ TEST(Http2ConnectionTest, AllowsClientsToParseFramesWithoutPeerPreface) {
 
 TEST(Http2ConnectionTest, ReportsZeroLengthFrames) {
     fiber::http::Http2Connection::Options options;
+    options.role = fiber::http::Http2Connection::ConnectionRole::Client;
     options.expect_peer_preface = false;
 
     std::string data = make_frame(0, 0x0, 0x0, 1, "");
@@ -706,6 +709,7 @@ TEST(Http2ConnectionTest, ReportsZeroLengthFrames) {
 
 TEST(Http2ConnectionTest, ReallocatesReadBufferWhenPayloadIsRetained) {
     fiber::http::Http2Connection::Options options;
+    options.role = fiber::http::Http2Connection::ConnectionRole::Client;
     options.expect_peer_preface = false;
 
     std::string first = make_frame(3, 0x0, 0x0, 1, "abc");
@@ -733,6 +737,7 @@ TEST(Http2ConnectionTest, RejectsPrefaceMismatch) {
 
 TEST(Http2ConnectionTest, RejectsFramesLargerThanConfiguredMax) {
     fiber::http::Http2Connection::Options options;
+    options.role = fiber::http::Http2Connection::ConnectionRole::Client;
     options.expect_peer_preface = false;
     options.max_frame_size = 3;
 
@@ -746,6 +751,7 @@ TEST(Http2ConnectionTest, RejectsFramesLargerThanConfiguredMax) {
 
 TEST(Http2ConnectionTest, PropagatesPayloadCallbackErrors) {
     fiber::http::Http2Connection::Options options;
+    options.role = fiber::http::Http2Connection::ConnectionRole::Client;
     options.expect_peer_preface = false;
 
     std::string frame = make_frame(4, 0x0, 0x0, 1, "data");
@@ -759,6 +765,7 @@ TEST(Http2ConnectionTest, PropagatesPayloadCallbackErrors) {
 
 TEST(Http2ConnectionTest, SettingsFrameUpdatesPeerStateAndSendsAck) {
     fiber::http::Http2Connection::Options options;
+    options.role = fiber::http::Http2Connection::ConnectionRole::Client;
     options.expect_peer_preface = false;
 
     std::string payload;
@@ -796,6 +803,7 @@ TEST(Http2ConnectionTest, SettingsFrameUpdatesPeerStateAndSendsAck) {
 
 TEST(Http2ConnectionTest, LowerInitialWindowCanMakeStreamSendWindowNegative) {
     fiber::http::Http2Connection::Options options;
+    options.role = fiber::http::Http2Connection::ConnectionRole::Client;
     options.expect_peer_preface = false;
     options.max_frame_size = 32768;
     options.initial_connection_send_window = 100000;
@@ -831,6 +839,7 @@ TEST(Http2ConnectionTest, LowerInitialWindowCanMakeStreamSendWindowNegative) {
 
 TEST(Http2ConnectionTest, PingFrameRepliesWithAckAndSamePayload) {
     fiber::http::Http2Connection::Options options;
+    options.role = fiber::http::Http2Connection::ConnectionRole::Client;
     options.expect_peer_preface = false;
 
     std::string ping = make_frame(8, 0x6, 0x0, 0, "12345678");
@@ -847,6 +856,7 @@ TEST(Http2ConnectionTest, PingFrameRepliesWithAckAndSamePayload) {
 
 TEST(Http2ConnectionTest, WindowUpdateIncreasesConnectionAndStreamSendWindow) {
     fiber::http::Http2Connection::Options options;
+    options.role = fiber::http::Http2Connection::ConnectionRole::Client;
     options.expect_peer_preface = false;
 
     std::string stream_update_payload;
@@ -874,6 +884,7 @@ TEST(Http2ConnectionTest, WindowUpdateIncreasesConnectionAndStreamSendWindow) {
 
 TEST(Http2ConnectionTest, ZeroIncrementWindowUpdateOnStreamSendsRstStream) {
     fiber::http::Http2Connection::Options options;
+    options.role = fiber::http::Http2Connection::ConnectionRole::Client;
     options.expect_peer_preface = false;
 
     std::string payload(4, '\0');
@@ -890,6 +901,7 @@ TEST(Http2ConnectionTest, ZeroIncrementWindowUpdateOnStreamSendsRstStream) {
 
 TEST(Http2ConnectionTest, RstStreamClosesActiveStream) {
     fiber::http::Http2Connection::Options options;
+    options.role = fiber::http::Http2Connection::ConnectionRole::Client;
     options.expect_peer_preface = false;
 
     std::string payload(4, '\0');
@@ -908,6 +920,7 @@ TEST(Http2ConnectionTest, RstStreamClosesActiveStream) {
 
 TEST(Http2ConnectionTest, RejectsInvalidPingLengthAsConnectionError) {
     fiber::http::Http2Connection::Options options;
+    options.role = fiber::http::Http2Connection::ConnectionRole::Client;
     options.expect_peer_preface = false;
 
     ControlRunOutcome outcome = execute_control_connection({make_frame(4, 0x6, 0x0, 0, "pong")}, {}, options);
@@ -918,6 +931,7 @@ TEST(Http2ConnectionTest, RejectsInvalidPingLengthAsConnectionError) {
 
 TEST(Http2ConnectionTest, ClientConnectionPrefaceSendsPrefaceSettingsAndWindowUpdate) {
     fiber::http::Http2Connection::Options options;
+    options.role = fiber::http::Http2Connection::ConnectionRole::Client;
     options.expect_peer_preface = false;
     options.max_frame_size = 0x00ffffffU;
     options.local_max_concurrent_streams = 128;
@@ -952,6 +966,7 @@ TEST(Http2ConnectionTest, ClientConnectionPrefaceSendsPrefaceSettingsAndWindowUp
 
 TEST(Http2ConnectionTest, ServerConnectionPrefaceSendsSettingsAndWindowUpdateAfterPeerPreface) {
     fiber::http::Http2Connection::Options options;
+    options.role = fiber::http::Http2Connection::ConnectionRole::Server;
     options.expect_peer_preface = true;
     options.max_frame_size = 0x00ffffffU;
     options.local_max_concurrent_streams = 128;

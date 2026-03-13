@@ -26,6 +26,11 @@ namespace fiber::http {
 
 class Http2Connection : public common::NonCopyable, public common::NonMovable {
 public:
+    enum class ConnectionRole : std::uint8_t {
+        Client,
+        Server,
+    };
+
     using FrameHeader = Http2FrameHeader;
     using RunResult = common::IoResult<void>;
     using SendResult = common::IoResult<void>;
@@ -36,6 +41,7 @@ public:
     using PendingKind = Http2PendingKind;
 
     struct Options {
+        ConnectionRole role = ConnectionRole::Server;
         std::size_t read_buffer_size = 64 * 1024;
         std::chrono::milliseconds read_timeout = std::chrono::seconds(30);
         std::chrono::milliseconds write_timeout = std::chrono::seconds(30);
@@ -113,6 +119,7 @@ protected:
     [[nodiscard]] std::uint32_t peer_max_concurrent_streams() const noexcept {
         return peer_advertised_max_concurrent_streams_;
     }
+    [[nodiscard]] ConnectionRole role() const noexcept { return options_.role; }
     [[nodiscard]] bool peer_enable_push() const noexcept { return peer_enable_push_; }
     [[nodiscard]] bool has_stream(std::uint32_t stream_id) const noexcept { return streams_.find(stream_id) != nullptr; }
     [[nodiscard]] bool send_queue_idle() const noexcept { return !writer_running_ && send_head_ == nullptr; }
@@ -132,8 +139,7 @@ private:
     common::IoErr apply_peer_initial_stream_window(std::uint32_t value) noexcept;
     common::IoErr send_control_frame(Http2FrameType type, std::uint8_t flags, std::uint32_t stream_id,
                                      const std::uint8_t *payload, std::size_t length) noexcept;
-    common::IoErr send_client_connection_preface() noexcept;
-    common::IoErr send_server_connection_preface() noexcept;
+    common::IoErr send_connection_preface() noexcept;
     common::IoErr send_settings_ack() noexcept;
     common::IoErr send_ping_ack(const std::uint8_t *opaque_data) noexcept;
     common::IoErr send_window_update(std::uint32_t stream_id, std::uint32_t increment) noexcept;
@@ -141,6 +147,8 @@ private:
     void handle_stream_error(std::uint32_t stream_id, Http2ErrorCode error_code,
                              common::IoErr pending_result = common::IoErr::Canceled) noexcept;
     [[nodiscard]] bool is_idle_stream(std::uint32_t stream_id) const noexcept;
+    [[nodiscard]] bool is_local_stream_id(std::uint32_t stream_id) const noexcept;
+    [[nodiscard]] bool is_peer_stream_id(std::uint32_t stream_id) const noexcept;
     [[nodiscard]] std::size_t configured_max_active_streams() const noexcept;
     fiber::async::Task<void> run_send_loop() noexcept;
     void start_send_loop() noexcept;
